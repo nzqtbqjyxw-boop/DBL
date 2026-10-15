@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from datetime import datetime
 
 import gspread
@@ -18,6 +19,8 @@ sh = gc.open_by_key(SHEET_ID)
 
 participants_ws = sh.worksheet("Участники")
 reports_ws = sh.worksheet("Отчёты")
+
+_write_lock = threading.Lock()
 
 PARTICIPANTS_HEADERS = [
     "ID участника", "Telegram/контакт", "Сезон", "Спорт", "Тариф",
@@ -57,30 +60,33 @@ def add_pending_participant(telegram_id: str, username: str, season: str = "S01"
     или, если заготовок не осталось, добавляет новую строку в конец.
     Возвращает номер строки.
     """
-    records = participants_ws.get_all_records()
-    row_index = None
-    for i, rec in enumerate(records, start=2):  # строка 1 — заголовок
-        telegram_field = str(rec.get("Telegram/контакт", "")).strip()
-        rec_season = str(rec.get("Сезон", "")).strip()
-        if telegram_field == "" and rec_season == season:
-            row_index = i
-            break
-
     telegram_value = f"{telegram_id} ({username})"
-    if row_index is not None:
-        participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Telegram/контакт") + 1, telegram_value)
-        participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Статус оплаты") + 1, "Ожидает проверки")
-        return row_index
+    # Лок защищает от гонки: два почти одновременных запроса не должны
+    # прочитать таблицу до того, как первый успел записать свою строку.
+    with _write_lock:
+        records = participants_ws.get_all_records()
+        row_index = None
+        for i, rec in enumerate(records, start=2):  # строка 1 — заголовок
+            telegram_field = str(rec.get("Telegram/контакт", "")).strip()
+            rec_season = str(rec.get("Сезон", "")).strip()
+            if telegram_field == "" and rec_season == season:
+                row_index = i
+                break
 
-    # заготовок для этого сезона больше нет — добавляем новую строку в конец
-    row = [
-        "", telegram_value, season, "", "", "",
-        "Ожидает проверки", "", "Не определено", "Нет", "", "", "",
-    ]
-    last_used = len(records) + 1  # +1 за заголовок
-    row_index = last_used + 1
-    participants_ws.update(f"A{row_index}:M{row_index}", [row], value_input_option="USER_ENTERED")
-    return row_index
+        if row_index is not None:
+            participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Telegram/контакт") + 1, telegram_value)
+            participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Статус оплаты") + 1, "Ожидает проверки")
+            return row_index
+
+        # заготовок для этого сезона больше нет — добавляем новую строку в конец
+        row = [
+            "", telegram_value, season, "", "", "",
+            "Ожидает проверки", "", "Не определено", "Нет", "", "", "",
+        ]
+        last_used = len(records) + 1  # +1 за заголовок
+        row_index = last_used + 1
+        participants_ws.update(f"A{row_index}:M{row_index}", [row], value_input_option="USER_ENTERED")
+        return row_index
 
 
 def set_participant_status(row_index: int, status: str, participant_id: str = None):
