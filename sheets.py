@@ -52,26 +52,32 @@ def find_participant_row(telegram_id: str):
 
 
 def add_pending_participant(telegram_id: str, username: str, season: str = "S01"):
-    """Добавляет участника со статусом 'Ожидает проверки оплаты'. Возвращает номер строки."""
+    """
+    Заполняет первую пустую заготовку (Telegram/контакт пуст, Сезон совпадает)
+    или, если заготовок не осталось, добавляет новую строку в конец.
+    Возвращает номер строки.
+    """
+    records = participants_ws.get_all_records()
+    row_index = None
+    for i, rec in enumerate(records, start=2):  # строка 1 — заголовок
+        telegram_field = str(rec.get("Telegram/контакт", "")).strip()
+        rec_season = str(rec.get("Сезон", "")).strip()
+        if telegram_field == "" and rec_season == season:
+            row_index = i
+            break
+
+    telegram_value = f"{telegram_id} ({username})"
+    if row_index is not None:
+        participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Telegram/контакт") + 1, telegram_value)
+        participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Статус оплаты") + 1, "Ожидает проверки")
+        return row_index
+
+    # заготовок для этого сезона больше нет — добавляем новую строку в конец
     row = [
-        "",  # ID участника — присваивается после подтверждения
-        f"{telegram_id} ({username})",
-        season,
-        "",
-        "",
-        "",
-        "Ожидает проверки",
-        "",
-        "Не определено",
-        "Нет",
-        "", "", "",
+        "", telegram_value, season, "", "", "",
+        "Ожидает проверки", "", "Не определено", "Нет", "", "", "",
     ]
-    # Лист может содержать много пустых строк ниже данных (фиксированный grid),
-    # поэтому append_row/INSERT_ROWS не годится — ищем первую реально пустую строку сами.
-    col_a = participants_ws.col_values(1)  # ID участника
-    col_b = participants_ws.col_values(2)  # Telegram/контакт
-    # последняя непустая строка по любому из ключевых столбцов + 1
-    last_used = max(len(col_a), len(col_b))
+    last_used = len(records) + 1  # +1 за заголовок
     row_index = last_used + 1
     participants_ws.update(f"A{row_index}:M{row_index}", [row], value_input_option="USER_ENTERED")
     return row_index
