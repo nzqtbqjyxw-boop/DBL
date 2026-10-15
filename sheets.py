@@ -127,8 +127,11 @@ def add_report(participant_id, season, day, training_date, sport, km, file_id):
         participant_id, season, day, training_date, sport, km, file_id,
         "На проверке", lives_before, "", "", "",
     ]
-    reports_ws.append_row(row, value_input_option="USER_ENTERED")
-    return reports_ws.row_count
+    with _write_lock:
+        col_a = reports_ws.col_values(1)  # ID участника — последняя реально заполненная строка
+        row_index = len(col_a) + 1
+        reports_ws.update(f"A{row_index}:L{row_index}", [row], value_input_option="USER_ENTERED")
+        return row_index
 
 
 def find_report_row(report_row_number: int):
