@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import date
 
@@ -11,6 +12,7 @@ import sheets
 
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
+log = logging.getLogger(__name__)
 
 
 class ReportStates(StatesGroup):
@@ -93,67 +95,83 @@ def _get_participant_telegram_id(participant_id: str):
 
 @router.callback_query(F.data.startswith("rep_ok:"))
 async def report_ok(callback: CallbackQuery, bot: Bot):
-    row = int(callback.data.split(":")[1])
-    values = sheets.find_report_row(row)
-    participant_id = values[0]
-    lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
-    lives_after = lives_before  # день зачтён, жизнь не меняется (или возвращается, если была снята ранее — решает организатор вручную при споре)
+    await callback.answer("Обрабатываю...")
+    try:
+        row = int(callback.data.split(":")[1])
+        values = sheets.find_report_row(row)
+        participant_id = values[0]
+        lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
+        lives_after = lives_before
 
-    sheets.update_report_decision(row, "Засчитано", lives_after)
+        sheets.update_report_decision(row, "Засчитано", lives_after)
 
-    tg_id = _get_participant_telegram_id(participant_id)
-    if tg_id:
-        await bot.send_message(int(tg_id), "✅ Твой отчёт засчитан!")
-    await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ЗАСЧИТАНО")
-    await callback.answer("Засчитано")
+        tg_id = _get_participant_telegram_id(participant_id)
+        if tg_id:
+            await bot.send_message(int(tg_id), "✅ Твой отчёт засчитан!")
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ЗАСЧИТАНО")
+    except Exception:
+        log.exception("Ошибка в report_ok")
+        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
 
 
 @router.callback_query(F.data.startswith("rep_no:"))
 async def report_no(callback: CallbackQuery, bot: Bot):
-    row = int(callback.data.split(":")[1])
-    values = sheets.find_report_row(row)
-    participant_id = values[0]
-    lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
-    lives_after = max(lives_before - 1, 0)
+    await callback.answer("Обрабатываю...")
+    try:
+        row = int(callback.data.split(":")[1])
+        values = sheets.find_report_row(row)
+        participant_id = values[0]
+        lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
+        lives_after = max(lives_before - 1, 0)
 
-    sheets.update_report_decision(row, "Не засчитано", lives_after)
+        sheets.update_report_decision(row, "Не засчитано", lives_after)
 
-    tg_id = _get_participant_telegram_id(participant_id)
-    if tg_id:
-        await bot.send_message(
-            int(tg_id),
-            f"❌ Отчёт не засчитан. Осталось жизней: {lives_after}.\n"
-            f"Если считаешь, что это ошибка — напиши организатору лично.",
-        )
-    await callback.message.edit_caption(caption=callback.message.caption + f"\n\n❌ НЕ ЗАСЧИТАНО (жизни: {lives_after})")
-    await callback.answer("Не засчитано")
+        tg_id = _get_participant_telegram_id(participant_id)
+        if tg_id:
+            await bot.send_message(
+                int(tg_id),
+                f"❌ Отчёт не засчитан. Осталось жизней: {lives_after}.\n"
+                f"Если считаешь, что это ошибка — напиши организатору лично.",
+            )
+        await callback.message.edit_caption(caption=callback.message.caption + f"\n\n❌ НЕ ЗАСЧИТАНО (жизни: {lives_after})")
+    except Exception:
+        log.exception("Ошибка в report_no")
+        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
 
 
 @router.callback_query(F.data.startswith("rep_bad:"))
 async def report_bad(callback: CallbackQuery, bot: Bot):
-    row = int(callback.data.split(":")[1])
-    values = sheets.find_report_row(row)
-    participant_id = values[0]
-    lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
+    await callback.answer("Обрабатываю...")
+    try:
+        row = int(callback.data.split(":")[1])
+        values = sheets.find_report_row(row)
+        participant_id = values[0]
+        lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
 
-    sheets.update_report_decision(row, "Плохой скриншот", lives_before, "Запрошена повторная отправка")
+        sheets.update_report_decision(row, "Плохой скриншот", lives_before, "Запрошена повторная отправка")
 
-    tg_id = _get_participant_telegram_id(participant_id)
-    if tg_id:
-        await bot.send_message(
-            int(tg_id),
-            "📷 Скриншот плохого качества — пришли, пожалуйста, более чёткое фото этой же тренировки через /report.",
-        )
-    await callback.message.edit_caption(caption=callback.message.caption + "\n\n📷 ПЛОХОЙ СКРИНШОТ")
-    await callback.answer("Запрошена повторная отправка")
+        tg_id = _get_participant_telegram_id(participant_id)
+        if tg_id:
+            await bot.send_message(
+                int(tg_id),
+                "📷 Скриншот плохого качества — пришли, пожалуйста, более чёткое фото этой же тренировки через /report.",
+            )
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n📷 ПЛОХОЙ СКРИНШОТ")
+    except Exception:
+        log.exception("Ошибка в report_bad")
+        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
 
 
 @router.callback_query(F.data.startswith("rep_susp:"))
 async def report_susp(callback: CallbackQuery, bot: Bot):
-    row = int(callback.data.split(":")[1])
-    values = sheets.find_report_row(row)
-    lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
+    await callback.answer("Обрабатываю...")
+    try:
+        row = int(callback.data.split(":")[1])
+        values = sheets.find_report_row(row)
+        lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
 
-    sheets.update_report_decision(row, "Подозрение на обман", lives_before, "Требуется ручная проверка организатором")
-    await callback.message.edit_caption(caption=callback.message.caption + "\n\n⚠️ НА РУЧНОЙ ПРОВЕРКЕ")
-    await callback.answer("Отмечено, статус не меняется до решения")
+        sheets.update_report_decision(row, "Подозрение на обман", lives_before, "Требуется ручная проверка организатором")
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n⚠️ НА РУЧНОЙ ПРОВЕРКЕ")
+    except Exception:
+        log.exception("Ошибка в report_susp")
+        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
