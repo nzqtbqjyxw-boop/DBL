@@ -46,10 +46,14 @@ def get_all_participants():
 
 
 def find_participant_row(telegram_id: str):
-    """Возвращает (row_index, record) по Telegram ID, либо (None, None)."""
+    """Возвращает (row_index, record) по Telegram ID, либо (None, None).
+    Поле хранится как "<id> (<имя>)", поэтому сравниваем только часть до пробела."""
     records = participants_ws.get_all_records()
+    target = str(telegram_id).strip()
     for i, rec in enumerate(records, start=2):  # строка 1 — заголовок
-        if str(rec.get("Telegram/контакт", "")) == str(telegram_id):
+        field = str(rec.get("Telegram/контакт", "")).strip()
+        field_id = field.split(" ")[0] if field else ""
+        if field_id == target:
             return i, rec
     return None, None
 
