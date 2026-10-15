@@ -3,9 +3,11 @@ import os
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 import sheets
+from handlers.reports import ReportStates
 
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
@@ -39,7 +41,12 @@ async def cmd_start(message: Message):
     )
 
 
-@router.message(F.photo | F.document)
+async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
+    current_state = await state.get_state()
+    return current_state != ReportStates.waiting_photo.state
+
+
+@router.message((F.photo | F.document), _not_in_report_flow)
 async def handle_payment_proof(message: Message, bot: Bot):
     row, rec = sheets.find_participant_row(message.from_user.id)
     if rec is None:
