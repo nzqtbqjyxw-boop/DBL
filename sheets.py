@@ -52,7 +52,7 @@ def find_participant_row(telegram_id: str):
 
 
 def add_pending_participant(telegram_id: str, username: str, season: str = "S01"):
-    """Добавляет участника со статусом 'Ожидает проверки оплаты'."""
+    """Добавляет участника со статусом 'Ожидает проверки оплаты'. Возвращает номер строки."""
     row = [
         "",  # ID участника — присваивается после подтверждения
         f"{telegram_id} ({username})",
@@ -66,8 +66,15 @@ def add_pending_participant(telegram_id: str, username: str, season: str = "S01"
         "Нет",
         "", "", "",
     ]
-    participants_ws.append_row(row, value_input_option="USER_ENTERED")
-    return participants_ws.row_count
+    # Лист может содержать много пустых строк ниже данных (фиксированный grid),
+    # поэтому append_row/INSERT_ROWS не годится — ищем первую реально пустую строку сами.
+    col_a = participants_ws.col_values(1)  # ID участника
+    col_b = participants_ws.col_values(2)  # Telegram/контакт
+    # последняя непустая строка по любому из ключевых столбцов + 1
+    last_used = max(len(col_a), len(col_b))
+    row_index = last_used + 1
+    participants_ws.update(f"A{row_index}:M{row_index}", [row], value_input_option="USER_ENTERED")
+    return row_index
 
 
 def set_participant_status(row_index: int, status: str, participant_id: str = None):
