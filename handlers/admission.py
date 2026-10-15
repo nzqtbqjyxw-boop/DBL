@@ -41,11 +41,10 @@ async def cmd_start(message: Message):
 async def handle_payment_proof(message: Message, bot: Bot):
     row, rec = sheets.find_participant_row(message.from_user.id)
     if rec is None:
-        sheets.add_pending_participant(
+        row = sheets.add_pending_participant(
             telegram_id=message.from_user.id,
             username=message.from_user.username or message.from_user.full_name,
         )
-        row, rec = sheets.find_participant_row(message.from_user.id)
 
     caption = (
         f"Новая заявка на допуск\n"
