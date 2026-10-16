@@ -23,7 +23,7 @@ reports_ws = sh.worksheet("Отчёты")
 _write_lock = threading.Lock()
 
 PARTICIPANTS_HEADERS = [
-    "ID участника", "Telegram/контакт", "Сезон", "Спорт", "Тариф",
+    "ID участника", "Telegram/контакт", "Email", "Сезон", "Спорт", "Тариф",
     "Сумма оплаты, ₽", "Статус оплаты", "Дата оплаты", "Право на медаль",
     "Адрес получен?", "Дата отправки", "Трек-номер", "Примечания",
 ]
@@ -45,6 +45,75 @@ def get_all_participants():
     return participants_ws.get_all_records()
 
 
+def add_paid_via_webhook(name: str, email: str, username: str, price: int, season: str = "S01"):
+    """
+    Вызывается после успешной оплаты через ЮKassa webhook.
+    Тариф определяется по сумме. Заполняет заготовку или добавляет новую строку.
+    Email и username сохраняются в 'Примечания' для последующей сверки в /start.
+    Возвращает (row_index, participant_id).
+    """
+    tariff = "С медалью" if price >= 1000 else "Без медали"
+    note = f"email:{email.strip().lower()}" + (f" tg:@{username.strip().lstrip('@')}" if username else "")
+
+    with _write_lock:
+        records = participants_ws.get_all_records()
+        row_index = None
+        for i, rec in enumerate(records, start=2):
+            telegram_field = str(rec.get("Telegram/контакт", "")).strip()
+            rec_season = str(rec.get("Сезон", "")).strip()
+            if telegram_field == "" and rec_season == season:
+                row_index = i
+                break
+
+        participant_id = f"DBL {season}-{str(row_index if row_index else len(records) + 2).zfill(4)}"
+
+        values = {
+            "ID участника": participant_id,
+            "Email": email.strip().lower(),
+            "Тариф": tariff,
+            "Сумма оплаты, ₽": price,
+            "Статус оплаты": "Оплачено (ждёт /start)",
+            "Примечания": note,
+        }
+
+        if row_index is not None:
+            for col_name, value in values.items():
+                participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index(col_name) + 1, value)
+            return row_index, participant_id
+
+        row = [
+            participant_id, "", email.strip().lower(), season, "", tariff, price,
+            "Оплачено (ждёт /start)", now_str(), "Не определено", "Нет", "", "", note,
+        ]
+        last_used = len(records) + 1
+        row_index = last_used + 1
+        participants_ws.update(f"A{row_index}:N{row_index}", [row], value_input_option="USER_ENTERED")
+        return row_index, participant_id
+
+
+def find_paid_by_email(email: str):
+    """Ищет оплаченную, но ещё не привязанную к Telegram заявку по колонке Email."""
+    target = email.strip().lower()
+    records = participants_ws.get_all_records()
+    for i, rec in enumerate(records, start=2):
+        rec_email = str(rec.get("Email", "")).strip().lower()
+        status = rec.get("Статус оплаты", "")
+        if rec_email == target and status == "Оплачено (ждёт /start)":
+            return i, rec
+    return None, None
+
+
+def link_telegram_to_paid(row_index: int, telegram_id: str, username: str):
+    telegram_value = f"{telegram_id} ({username or ''})"
+    participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Telegram/контакт") + 1, telegram_value)
+    participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Статус оплаты") + 1, "Оплачено")
+
+
+def set_participant_field(row_index: int, field: str, value):
+    col = PARTICIPANTS_HEADERS.index(field) + 1
+    participants_ws.update_cell(row_index, col, value)
+
+
 def find_participant_row(telegram_id: str):
     """Возвращает (row_index, record) по Telegram ID, либо (None, None).
     Поле хранится как "<id> (<имя>)", поэтому сравниваем только часть до пробела."""
@@ -58,15 +127,13 @@ def find_participant_row(telegram_id: str):
     return None, None
 
 
-def add_pending_participant(telegram_id: str, username: str, season: str = "S01"):
+def add_pending_participant(telegram_id: str, username: str, sport: str, tariff: str, price: int, season: str = "S01"):
     """
     Заполняет первую пустую заготовку (Telegram/контакт пуст, Сезон совпадает)
     или, если заготовок не осталось, добавляет новую строку в конец.
-    Возвращает номер строки.
+    Записывает также спорт/тариф/сумму. Возвращает номер строки.
     """
     telegram_value = f"{telegram_id} ({username})"
-    # Лок защищает от гонки: два почти одновременных запроса не должны
-    # прочитать таблицу до того, как первый успел записать свою строку.
     with _write_lock:
         records = participants_ws.get_all_records()
         row_index = None
@@ -77,19 +144,26 @@ def add_pending_participant(telegram_id: str, username: str, season: str = "S01"
                 row_index = i
                 break
 
+        values = {
+            "Telegram/контакт": telegram_value,
+            "Спорт": sport,
+            "Тариф": tariff,
+            "Сумма оплаты, ₽": price,
+            "Статус оплаты": "Ожидает проверки",
+        }
+
         if row_index is not None:
-            participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Telegram/контакт") + 1, telegram_value)
-            participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index("Статус оплаты") + 1, "Ожидает проверки")
+            for col_name, value in values.items():
+                participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index(col_name) + 1, value)
             return row_index
 
-        # заготовок для этого сезона больше нет — добавляем новую строку в конец
         row = [
-            "", telegram_value, season, "", "", "",
+            "", telegram_value, "", season, sport, tariff, price,
             "Ожидает проверки", "", "Не определено", "Нет", "", "", "",
         ]
         last_used = len(records) + 1  # +1 за заголовок
         row_index = last_used + 1
-        participants_ws.update(f"A{row_index}:M{row_index}", [row], value_input_option="USER_ENTERED")
+        participants_ws.update(f"A{row_index}:N{row_index}", [row], value_input_option="USER_ENTERED")
         return row_index
 
 
