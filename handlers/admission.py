@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 PRICE_NO_MEDAL = 500
 PRICE_WITH_MEDAL = 1100
+PAYMENT_LINK = "https://quietly-divine-jay.tilda.ws"
 
 
 class OnboardingStates(StatesGroup):
@@ -101,8 +102,9 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
     await state.set_state(OnboardingStates.waiting_payment_proof)
     await callback.message.edit_text(
         f"Тариф: {tariff} — {price}₽\n\n"
-        f"Оплати по реквизитам на сайте, затем пришли сюда чек/скриншот оплаты "
-        f"и укажи ФИО, которое использовал при оплате."
+        f"Оплати на сайте: {PAYMENT_LINK}\n\n"
+        f"После оплаты пришли сюда чек/скриншот и укажи ФИО, "
+        f"которое использовал при оплате."
     )
     await callback.answer()
 
