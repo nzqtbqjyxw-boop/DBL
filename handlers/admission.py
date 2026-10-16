@@ -27,6 +27,7 @@ class OnboardingStates(StatesGroup):
     choosing_sport = State()
     choosing_tariff = State()
     waiting_payment_proof = State()
+    waiting_email = State()
 
 
 class AddressStates(StatesGroup):
@@ -77,11 +78,56 @@ async def cmd_start(message: Message, state: FSMContext):
         await message.answer("Заявка на проверке у организатора. Жди подтверждения.")
         return
 
-    await state.set_state(OnboardingStates.choosing_sport)
+    await state.set_state(OnboardingStates.waiting_email)
     await message.answer(
-        "Привет! Это бот сезона DBL.\n\nСначала выбери вид спорта:",
-        reply_markup=sport_keyboard(),
+        "Привет! Это бот сезона DBL.\n\n"
+        "Если ты уже оплатил участие на сайте — пришли email, который указывал при оплате.\n\n"
+        f"Если оплаты ещё не было — оплати на сайте: {PAYMENT_LINK}"
     )
+
+
+@router.message(OnboardingStates.waiting_email, F.text)
+async def got_email(message: Message, state: FSMContext):
+    email = message.text.strip()
+    if "@" not in email or "." not in email:
+        await message.answer("Это не похоже на email. Пришли email, который указывал при оплате на сайте.")
+        return
+
+    row, rec = sheets.find_paid_by_email(email)
+    if row is None:
+        await message.answer(
+            "Не нашёл оплату с таким email. Проверь, что ввёл его без опечаток, "
+            f"или напиши организатору: {ORGANIZER_USERNAME}"
+        )
+        return
+
+    sheets.link_telegram_to_paid(
+        row_index=row,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username or message.from_user.full_name,
+    )
+    participant_id = rec.get("ID участника")
+    tariff = rec.get("Тариф")
+
+    await message.answer(
+        f"✅ Оплата найдена! Твой номер участника: {participant_id}.",
+        reply_markup=MAIN_KEYBOARD,
+    )
+    if tariff == "С медалью":
+        await message.answer(
+            "Твой тариф включает медаль — пришли, пожалуйста, адрес доставки "
+            "(город, улица, дом, квартира, индекс, получатель)."
+        )
+        sheets.set_participant_field(row, "Адрес получен?", "Ожидается")
+    await state.clear()
+
+
+@router.message(Command("manual"))
+async def cmd_manual_onboarding(message: Message, state: FSMContext):
+    """Запасной путь, если оплата на сайте недоступна: выбор спорта/тарифа
+    и отправка чека прямо в бота для ручной проверки организатором."""
+    await state.set_state(OnboardingStates.choosing_sport)
+    await message.answer("Сначала выбери вид спорта:", reply_markup=sport_keyboard())
 
 
 @router.callback_query(OnboardingStates.choosing_sport, F.data.startswith("sport:"))
