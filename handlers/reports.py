@@ -12,6 +12,7 @@ import sheets
 
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
+ORGANIZER_USERNAME = "@manchik_luts"
 log = logging.getLogger(__name__)
 
 
@@ -131,7 +132,7 @@ async def report_no(callback: CallbackQuery, bot: Bot):
             await bot.send_message(
                 int(tg_id),
                 f"❌ Отчёт не засчитан. Осталось жизней: {lives_after}.\n"
-                f"Если считаешь, что это ошибка — напиши организатору лично.",
+                f"Если считаешь, что это ошибка — напиши организатору лично: {ORGANIZER_USERNAME}",
             )
         await callback.message.edit_caption(caption=callback.message.caption + f"\n\n❌ НЕ ЗАСЧИТАНО (жизни: {lives_after})")
     except Exception:
