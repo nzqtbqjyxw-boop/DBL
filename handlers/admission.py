@@ -204,11 +204,14 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
     try:
         row = int(callback.data.split(":")[1])
         rec = sheets.participants_ws.row_values(row)
-        telegram_field = rec[1] if len(rec) > 1 else ""
-        telegram_id = telegram_field.split(" ")[0]
-        tariff = rec[4] if len(rec) > 4 else ""
+        def _col(name, default=""):
+            idx = sheets.PARTICIPANTS_HEADERS.index(name)
+            return rec[idx] if len(rec) > idx else default
 
-        season = rec[2] if len(rec) > 2 else "S01"
+        telegram_field = _col("Telegram/контакт")
+        telegram_id = telegram_field.split(" ")[0]
+        tariff = _col("Тариф")
+        season = _col("Сезон", "S01")
         participant_id = f"DBL {season}-{str(row).zfill(4)}"
         sheets.set_participant_status(row, "Оплачено", participant_id)
 
@@ -240,7 +243,8 @@ async def admission_no(callback: CallbackQuery, bot: Bot):
     try:
         row = int(callback.data.split(":")[1])
         rec = sheets.participants_ws.row_values(row)
-        telegram_field = rec[1] if len(rec) > 1 else ""
+        idx = sheets.PARTICIPANTS_HEADERS.index("Telegram/контакт")
+        telegram_field = rec[idx] if len(rec) > idx else ""
         telegram_id = telegram_field.split(" ")[0]
 
         sheets.set_participant_status(row, "Отклонено")
@@ -260,7 +264,8 @@ async def admission_retry(callback: CallbackQuery, bot: Bot):
     try:
         row = int(callback.data.split(":")[1])
         rec = sheets.participants_ws.row_values(row)
-        telegram_field = rec[1] if len(rec) > 1 else ""
+        idx = sheets.PARTICIPANTS_HEADERS.index("Telegram/контакт")
+        telegram_field = rec[idx] if len(rec) > idx else ""
         telegram_id = telegram_field.split(" ")[0]
 
         await bot.send_message(
