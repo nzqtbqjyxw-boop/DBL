@@ -4,14 +4,55 @@ import os
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 
 import sheets
 from handlers.reports import ReportStates
 
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
+ORGANIZER_USERNAME = "@manchik_luts"
 log = logging.getLogger(__name__)
+
+PRICE_NO_MEDAL = 500
+PRICE_WITH_MEDAL = 1100
+
+
+class OnboardingStates(StatesGroup):
+    choosing_sport = State()
+    choosing_tariff = State()
+    waiting_payment_proof = State()
+
+
+class AddressStates(StatesGroup):
+    waiting_address = State()
+
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📝 Отправить отчёт")],
+        [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="ℹ️ Правила")],
+    ],
+    resize_keyboard=True,
+)
+
+
+def sport_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏃 Бег (мин 2,5 км/день)", callback_data="sport:Бег")],
+        [InlineKeyboardButton(text="🚶 Ходьба (мин 3 км/день)", callback_data="sport:Ходьба")],
+    ])
+
+
+def tariff_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Без медали — {PRICE_NO_MEDAL}₽", callback_data="tariff:Без медали")],
+        [InlineKeyboardButton(text=f"С медалью — {PRICE_WITH_MEDAL}₽", callback_data="tariff:С медалью")],
+    ])
 
 
 def admission_keyboard(row_index: int):
@@ -23,42 +64,75 @@ def admission_keyboard(row_index: int):
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
     row, rec = sheets.find_participant_row(message.from_user.id)
     if rec and rec.get("Статус оплаты") == "Оплачено":
         await message.answer(
-            f"С возвращением! Твой номер участника: {rec.get('ID участника')}.\n"
-            f"Отправляй ежедневные отчёты командой /report."
+            f"С возвращением! Твой номер участника: {rec.get('ID участника')}.",
+            reply_markup=MAIN_KEYBOARD,
         )
         return
     if rec and rec.get("Статус оплаты") == "Ожидает проверки":
         await message.answer("Заявка на проверке у организатора. Жди подтверждения.")
         return
+
+    await state.set_state(OnboardingStates.choosing_sport)
     await message.answer(
-        "Привет! Это бот сезона DBL.\n\n"
-        "Чтобы начать, пришли сюда чек/скриншот оплаты и укажи ФИО, "
-        "которое использовал при оплате."
+        "Привет! Это бот сезона DBL.\n\nСначала выбери вид спорта:",
+        reply_markup=sport_keyboard(),
     )
+
+
+@router.callback_query(OnboardingStates.choosing_sport, F.data.startswith("sport:"))
+async def chosen_sport(callback: CallbackQuery, state: FSMContext):
+    sport = callback.data.split(":", 1)[1]
+    await state.update_data(sport=sport)
+    await state.set_state(OnboardingStates.choosing_tariff)
+    await callback.message.edit_text(f"Вид спорта: {sport}\n\nТеперь выбери тариф:")
+    await callback.message.answer("Тариф:", reply_markup=tariff_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(OnboardingStates.choosing_tariff, F.data.startswith("tariff:"))
+async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
+    tariff = callback.data.split(":", 1)[1]
+    price = PRICE_WITH_MEDAL if tariff == "С медалью" else PRICE_NO_MEDAL
+    await state.update_data(tariff=tariff, price=price)
+    await state.set_state(OnboardingStates.waiting_payment_proof)
+    await callback.message.edit_text(
+        f"Тариф: {tariff} — {price}₽\n\n"
+        f"Оплати по реквизитам на сайте, затем пришли сюда чек/скриншот оплаты "
+        f"и укажи ФИО, которое использовал при оплате."
+    )
+    await callback.answer()
 
 
 async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
     current_state = await state.get_state()
-    return current_state != ReportStates.waiting_photo.state
+    return current_state not in (ReportStates.waiting_photo.state, ReportStates.waiting_km.state)
 
 
-@router.message((F.photo | F.document), _not_in_report_flow)
-async def handle_payment_proof(message: Message, bot: Bot):
-    row, rec = sheets.find_participant_row(message.from_user.id)
-    if rec is None:
-        row = sheets.add_pending_participant(
-            telegram_id=message.from_user.id,
-            username=message.from_user.username or message.from_user.full_name,
-        )
+@router.message((F.photo | F.document), _not_in_report_flow, OnboardingStates.waiting_payment_proof)
+async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    sport = data.get("sport", "")
+    tariff = data.get("tariff", "")
+    price = data.get("price", "")
+
+    row = sheets.add_pending_participant(
+        telegram_id=message.from_user.id,
+        username=message.from_user.username or message.from_user.full_name,
+        sport=sport,
+        tariff=tariff,
+        price=price,
+    )
 
     caption = (
         f"Новая заявка на допуск\n"
         f"Telegram: @{message.from_user.username or '—'} ({message.from_user.id})\n"
         f"Имя: {message.from_user.full_name}\n"
+        f"Спорт: {sport}\n"
+        f"Тариф: {tariff} — {price}₽\n"
         f"Строка в таблице: {row}\n\n"
         f"{message.caption or ''}"
     )
@@ -73,6 +147,7 @@ async def handle_payment_proof(message: Message, bot: Bot):
             caption=caption, reply_markup=admission_keyboard(row),
         )
     await message.answer("Заявка отправлена организатору на проверку. Жди подтверждения.")
+    await state.clear()
 
 
 @router.callback_query(F.data.startswith("adm_ok:"))
@@ -83,6 +158,7 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
         rec = sheets.participants_ws.row_values(row)
         telegram_field = rec[1] if len(rec) > 1 else ""
         telegram_id = telegram_field.split(" ")[0]
+        tariff = rec[4] if len(rec) > 4 else ""
 
         season = rec[2] if len(rec) > 2 else "S01"
         participant_id = f"DBL {season}-{str(row).zfill(4)}"
@@ -90,15 +166,24 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
 
         await bot.send_message(
             int(telegram_id),
-            f"✅ Оплата подтверждена! Твой номер участника: {participant_id}.\n"
-            f"Отправляй ежедневные отчёты командой /report.",
+            f"✅ Оплата подтверждена! Твой номер участника: {participant_id}.",
+            reply_markup=MAIN_KEYBOARD,
         )
+
+        if tariff == "С медалью":
+            await bot.send_message(
+                int(telegram_id),
+                "Твой тариф включает медаль — пришли, пожалуйста, адрес доставки "
+                "(город, улица, дом, квартира, индекс, получатель).",
+            )
+            sheets.set_participant_field(row, "Адрес получен?", "Ожидается")
+
         await callback.message.edit_caption(
             caption=callback.message.caption + f"\n\n✅ ПОДТВЕРЖДЕНО: {participant_id}"
         )
     except Exception:
         log.exception("Ошибка в admission_ok")
-        await callback.message.answer(f"⚠️ Ошибка при обработке: см. логи Railway")
+        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
 
 
 @router.callback_query(F.data.startswith("adm_no:"))
@@ -113,7 +198,7 @@ async def admission_no(callback: CallbackQuery, bot: Bot):
         sheets.set_participant_status(row, "Отклонено")
         await bot.send_message(
             int(telegram_id),
-            "❌ Оплата не подтверждена. Свяжись с организатором для уточнения.",
+            f"❌ Оплата не подтверждена. Напиши организатору лично: {ORGANIZER_USERNAME}",
         )
         await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
     except Exception:
@@ -138,3 +223,60 @@ async def admission_retry(callback: CallbackQuery, bot: Bot):
     except Exception:
         log.exception("Ошибка в admission_retry")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
+
+
+# ---------- Профиль / Правила / кнопка отчёта ----------
+
+@router.message(F.text == "👤 Профиль")
+async def cmd_profile(message: Message):
+    row, rec = sheets.find_participant_row(message.from_user.id)
+    if not rec or rec.get("Статус оплаты") != "Оплачено":
+        await message.answer("Ты ещё не допущен к сезону.")
+        return
+    lives = sheets.get_lives(rec.get("ID участника"))
+    text = (
+        f"👤 Профиль\n"
+        f"Номер: {rec.get('ID участника')}\n"
+        f"Спорт: {rec.get('Спорт') or '—'}\n"
+        f"Тариф: {rec.get('Тариф') or '—'}\n"
+        f"Жизней осталось: {lives}\n"
+    )
+    if rec.get("Тариф") == "С медалью":
+        addr_status = rec.get("Адрес получен?", "Нет")
+        text += f"Адрес доставки: {addr_status}\n"
+    await message.answer(text)
+
+
+@router.message(F.text == "ℹ️ Правила")
+async def cmd_rules(message: Message):
+    await message.answer(
+        "Сезон — 14 дней. Бег мин 2,5 км/день или ходьба мин 3 км/день.\n"
+        "3 жизни. Медаль — если сохранил хотя бы 1 жизнь и не более 3 "
+        "незачтённых дней за сезон.\n"
+        f"Вопросы — организатору: {ORGANIZER_USERNAME}"
+    )
+
+
+@router.message(F.text == "📝 Отправить отчёт")
+async def cmd_report_button(message: Message, state: FSMContext):
+    from handlers.reports import cmd_report
+    await cmd_report(message, state)
+
+
+# ---------- Адрес доставки (после допуска по тарифу "С медалью") ----------
+
+@router.message(F.text, _not_in_report_flow)
+async def catch_address(message: Message, bot: Bot):
+    """Если участник допущен по тарифу 'С медалью' и адрес ещё не получен —
+    любое его текстовое сообщение (кроме кнопок меню) считаем адресом."""
+    if message.text in ("📝 Отправить отчёт", "👤 Профиль", "ℹ️ Правила"):
+        return
+    row, rec = sheets.find_participant_row(message.from_user.id)
+    if rec and rec.get("Тариф") == "С медалью" and rec.get("Адрес получен?") == "Ожидается":
+        sheets.set_participant_field(row, "Адрес получен?", "Да")
+        sheets.set_participant_field(row, "Примечания", message.text)
+        await message.answer("Адрес сохранён, спасибо!", reply_markup=MAIN_KEYBOARD)
+        await bot.send_message(
+            ORGANIZER_CHAT_ID,
+            f"📍 Получен адрес доставки от {rec.get('ID участника')}:\n{message.text}",
+        )
