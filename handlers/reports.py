@@ -59,11 +59,13 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     file_id = message.photo[-1].file_id
     today = date.today().isoformat()
+    season_day = sheets.get_season_day()
+    day_str = str(season_day) if season_day else ""
 
     row = sheets.add_report(
         participant_id=data["participant_id"],
         season=data["season"],
-        day="",  # день сезона можно считать по датам позже вручную/по формуле
+        day=day_str,
         training_date=today,
         sport=data.get("sport", ""),
         km=data["km"],
