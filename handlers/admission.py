@@ -22,6 +22,8 @@ PRICE_NO_MEDAL = 500
 PRICE_WITH_MEDAL = 1100
 PAYMENT_LINK_NO_MEDAL = "https://yookassa.ru/my/i/atKmjoB8TKJB/l"
 PAYMENT_LINK_WITH_MEDAL = "https://yookassa.ru/my/i/atKnClymrePv/l"
+CHANNEL_LINK = "https://t.me/DBL_Better_life"
+GROUP_LINK = "https://t.me/+sK53VEAlDwo3YzVi"
 
 
 class OnboardingStates(StatesGroup):
@@ -78,9 +80,18 @@ async def cmd_start(message: Message, state: FSMContext):
         await message.answer("Заявка на проверке у организатора. Жди подтверждения.")
         return
 
+    await message.answer(
+        "🏔️ <b>DBL — Do Better Life</b>\n\n"
+        "Привет! Ты в боте сезона DBL — спортивного челленджа на 14 дней.\n\n"
+        "Каждый день ты выполняешь норму (бег или ходьба), подтверждаешь тренировку. "
+        "У тебя есть 3 жизни. Сохрани хотя бы одну до конца сезона — получишь медаль DBL.\n\n"
+        f"Подпишись на канал проекта, там новости и результаты: {CHANNEL_LINK}",
+        parse_mode="HTML",
+    )
+
     await state.set_state(OnboardingStates.choosing_sport)
     await message.answer(
-        "Привет! Это бот сезона DBL.\n\nСначала выбери вид спорта:",
+        "Теперь выбери вид спорта:",
         reply_markup=sport_keyboard(),
     )
 
@@ -102,11 +113,14 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
     link = PAYMENT_LINK_WITH_MEDAL if tariff == "С медалью" else PAYMENT_LINK_NO_MEDAL
     await state.update_data(tariff=tariff, price=price)
     await state.set_state(OnboardingStates.waiting_payment_proof)
+    pay_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=link)],
+    ])
     await callback.message.edit_text(
         f"Тариф: {tariff} — {price}₽\n\n"
-        f"Оплати по ссылке: {link}\n\n"
-        f"После оплаты пришли сюда чек/скриншот и укажи ФИО, "
-        f"которое использовал при оплате."
+        f"Нажми кнопку ниже, чтобы оплатить. После оплаты пришли сюда чек/скриншот "
+        f"и укажи ФИО, которое использовал при оплате.",
+        reply_markup=pay_kb,
     )
     await callback.answer()
 
@@ -173,7 +187,8 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
 
         await bot.send_message(
             int(telegram_id),
-            f"✅ Оплата подтверждена! Твой номер участника: {participant_id}.",
+            f"✅ Оплата подтверждена! Твой номер участника: {participant_id}.\n\n"
+            f"Присоединяйся к чату участников — там мы делимся результатами и поддерживаем друг друга:\n{GROUP_LINK}",
             reply_markup=MAIN_KEYBOARD,
         )
 
@@ -243,26 +258,39 @@ async def cmd_profile(message: Message):
         await message.answer("Ты ещё не допущен к сезону.")
         return
     lives = sheets.get_lives(rec.get("ID участника"))
+    season_day = sheets.get_season_day()
+    day_line = f"День сезона: {season_day}/14\n" if season_day else "Сезон ещё не начался\n"
+    hearts = "❤️" * lives + "🖤" * (3 - lives)
+
     text = (
-        f"👤 Профиль\n"
-        f"Номер: {rec.get('ID участника')}\n"
-        f"Спорт: {rec.get('Спорт') or '—'}\n"
+        f"👤 <b>Твой профиль DBL</b>\n\n"
+        f"Номер участника: <b>{rec.get('ID участника')}</b>\n"
+        f"Вид спорта: {rec.get('Спорт') or '—'}\n"
         f"Тариф: {rec.get('Тариф') or '—'}\n"
-        f"Жизней осталось: {lives}\n"
+        f"{day_line}"
+        f"Жизни: {hearts} ({lives}/3)\n"
     )
     if rec.get("Тариф") == "С медалью":
         addr_status = rec.get("Адрес получен?", "Нет")
         text += f"Адрес доставки: {addr_status}\n"
-    await message.answer(text)
+    await message.answer(text, parse_mode="HTML")
 
 
 @router.message(F.text == "ℹ️ Правила")
 async def cmd_rules(message: Message):
     await message.answer(
-        "Сезон — 14 дней. Бег мин 2,5 км/день или ходьба мин 3 км/день.\n"
-        "3 жизни. Медаль — если сохранил хотя бы 1 жизнь и не более 3 "
-        "незачтённых дней за сезон.\n"
-        f"Вопросы — организатору: {ORGANIZER_USERNAME}"
+        "📋 <b>Правила сезона DBL</b>\n\n"
+        "🗓 Сезон — 14 дней подряд\n"
+        "🏃 Бег — минимум 2,5 км в день\n"
+        "🚶 Ходьба — минимум 3 км в день\n\n"
+        "📸 Каждый день отправляешь подтверждение тренировки (фото/скрин с датой, "
+        "маршрутом, километражем) до 23:59.\n\n"
+        "❤️ У тебя 3 жизни. Пропустил норму — минус жизнь. Если докажешь, что "
+        "тренировка была выполнена в нужный день, до конца сезона — жизнь вернётся.\n\n"
+        "🏅 Медаль получает тот, кто сохранил хотя бы 1 жизнь и имеет не более "
+        "3 незачтённых дней за сезон.\n\n"
+        f"Вопросы — организатору: {ORGANIZER_USERNAME}",
+        parse_mode="HTML",
     )
 
 
