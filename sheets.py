@@ -34,9 +34,21 @@ REPORTS_HEADERS = [
     "Комментарий организатора", "Дата решения",
 ]
 
+SEASON_START_DATE = datetime.strptime("2026-10-27", "%Y-%m-%d")
+
 
 def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_season_day():
+    """Возвращает день сезона (1-14) или None если сезон ещё не начался."""
+    today = datetime.now().date()
+    start = SEASON_START_DATE.date()
+    if today < start:
+        return None
+    day = (today - start).days + 1
+    return day if day <= 14 else None
 
 
 # ---------- Участники ----------
