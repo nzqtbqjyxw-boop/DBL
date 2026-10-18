@@ -40,6 +40,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📝 Отправить отчёт")],
         [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="ℹ️ Правила")],
+        [KeyboardButton(text="🆘 Написать организатору")],
     ],
     resize_keyboard=True,
 )
@@ -289,6 +290,9 @@ async def cmd_rules(message: Message):
         "тренировка была выполнена в нужный день, до конца сезона — жизнь вернётся.\n\n"
         "🏅 Медаль получает тот, кто сохранил хотя бы 1 жизнь и имеет не более "
         "3 незачтённых дней за сезон.\n\n"
+        "📝 Отправить отчёт — кнопка «Отправить отчёт» в меню или команда /report.\n"
+        "Если скриншот плохо виден — организатор попросит переслать более чёткий, "
+        "это не считается нарушением.\n\n"
         f"Вопросы — организатору: {ORGANIZER_USERNAME}",
         parse_mode="HTML",
     )
@@ -300,13 +304,27 @@ async def cmd_report_button(message: Message, state: FSMContext):
     await cmd_report(message, state)
 
 
+@router.message(Command("help"))
+@router.message(F.text == "🆘 Написать организатору")
+async def cmd_contact_organizer(message: Message):
+    await message.answer(
+        "Если у тебя вопрос, проблема с отчётом, оплатой или что-то ещё — "
+        f"пиши прямо организатору: {ORGANIZER_USERNAME}\n\n"
+        "Опиши ситуацию и, если есть, свой номер участника (DBL S01-XXXX) — "
+        "так быстрее разберёмся."
+    )
+
+
+MENU_BUTTONS = ("📝 Отправить отчёт", "👤 Профиль", "ℹ️ Правила", "🆘 Написать организатору")
+
+
 # ---------- Адрес доставки (после допуска по тарифу "С медалью") ----------
 
 @router.message(F.text, _not_in_report_flow)
 async def catch_address(message: Message, bot: Bot):
     """Если участник допущен по тарифу 'С медалью' и адрес ещё не получен —
     любое его текстовое сообщение (кроме кнопок меню) считаем адресом."""
-    if message.text in ("📝 Отправить отчёт", "👤 Профиль", "ℹ️ Правила"):
+    if message.text in MENU_BUTTONS:
         return
     row, rec = sheets.find_participant_row(message.from_user.id)
     if rec and rec.get("Тариф") == "С медалью" and rec.get("Адрес получен?") == "Ожидается":
