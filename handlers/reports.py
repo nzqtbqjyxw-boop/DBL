@@ -21,6 +21,10 @@ class ReportStates(StatesGroup):
     waiting_photo = State()
 
 
+class OrganizerMsgStates(StatesGroup):
+    waiting_text = State()
+
+
 def report_keyboard(report_row: int):
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Засчитать", callback_data=f"rep_ok:{report_row}"),
@@ -28,6 +32,8 @@ def report_keyboard(report_row: int):
     ], [
         InlineKeyboardButton(text="📷 Плохой скриншот", callback_data=f"rep_bad:{report_row}"),
         InlineKeyboardButton(text="⚠️ Подозрение на обман", callback_data=f"rep_susp:{report_row}"),
+    ], [
+        InlineKeyboardButton(text="✉️ Написать участнику", callback_data=f"rep_msg:{report_row}"),
     ]])
 
 
@@ -37,7 +43,28 @@ async def cmd_report(message: Message, state: FSMContext):
     if not rec or rec.get("Статус оплаты") != "Оплачено":
         await message.answer("Ты ещё не допущен к сезону. Сначала пройди подтверждение оплаты.")
         return
-    await state.update_data(participant_id=rec.get("ID участника"), season=rec.get("Сезон"), sport=rec.get("Спорт"))
+
+    participant_id = rec.get("ID участника")
+    today = date.today().isoformat()
+    _, status, _ = sheets.get_today_report_status(participant_id, today)
+
+    if status in ("На проверке", "Засчитано", "Не засчитано", "Подозрение на обман"):
+        await message.answer(
+            "Отчёт за сегодня уже отправлен и обрабатывается или уже обработан. "
+            f"Если считаешь, что это ошибка — напиши организатору: {ORGANIZER_USERNAME}"
+        )
+        return
+    if status == "Плохой скриншот":
+        await state.update_data(
+            participant_id=participant_id, season=rec.get("Сезон"), sport=rec.get("Спорт"),
+            resend_bad=True,
+        )
+        await message.answer("Пришли более чёткое фото этой же тренировки.")
+        await state.set_state(ReportStates.waiting_photo)
+        await state.update_data(km=None)  # км не спрашиваем заново
+        return
+
+    await state.update_data(participant_id=participant_id, season=rec.get("Сезон"), sport=rec.get("Спорт"))
     await message.answer("Сколько километров сегодня? Пришли число (например 3.2).")
     await state.set_state(ReportStates.waiting_km)
 
@@ -59,27 +86,34 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     file_id = message.photo[-1].file_id
     today = date.today().isoformat()
-    season_day = sheets.get_season_day()
-    day_str = str(season_day) if season_day else ""
 
-    row = sheets.add_report(
-        participant_id=data["participant_id"],
-        season=data["season"],
-        day=day_str,
-        training_date=today,
-        sport=data.get("sport", ""),
-        km=data["km"],
-        file_id=file_id,
-    )
+    if data.get("resend_bad"):
+        # Повторная отправка после "Плохой скриншот" — обновляем ту же строку, не создаём новую
+        row, _, _ = sheets.get_today_report_status(data["participant_id"], today)
+        sheets.update_report_photo_and_status(row, file_id, "На проверке")
+        km_display = "—"
+    else:
+        season_day = sheets.get_season_day()
+        day_str = str(season_day) if season_day else ""
+        row = sheets.add_report(
+            participant_id=data["participant_id"],
+            season=data["season"],
+            day=day_str,
+            training_date=today,
+            sport=data.get("sport", ""),
+            km=data["km"],
+            file_id=file_id,
+        )
+        km_display = data["km"]
 
     await bot.send_photo(
         ORGANIZER_CHAT_ID,
         file_id,
         caption=(
-            f"Новый отчёт на проверку\n"
+            f"{'Повторный отчёт (был плохой скриншот)' if data.get('resend_bad') else 'Новый отчёт на проверку'}\n"
             f"Участник: {data['participant_id']}\n"
             f"Дата: {today}\n"
-            f"Км: {data['km']}\n"
+            f"Км: {km_display}\n"
             f"Строка: {row}"
         ),
         reply_markup=report_keyboard(row),
@@ -165,16 +199,54 @@ async def report_bad(callback: CallbackQuery, bot: Bot):
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
 
 
+@router.callback_query(F.data.startswith("rep_msg:"))
+async def report_msg_start(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    row = int(callback.data.split(":")[1])
+    values = sheets.find_report_row(row)
+    participant_id = values[0]
+    tg_id = _get_participant_telegram_id(participant_id)
+    if not tg_id:
+        await callback.message.answer("Не нашёл Telegram ID участника.")
+        return
+    await state.update_data(target_tg_id=tg_id, target_participant_id=participant_id)
+    await state.set_state(OrganizerMsgStates.waiting_text)
+    await callback.message.answer(f"Пришли текст для {participant_id} — отправлю от своего имени.")
+
+
+@router.message(OrganizerMsgStates.waiting_text, F.text)
+async def report_msg_send(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    try:
+        await bot.send_message(int(data["target_tg_id"]), message.text)
+        await message.answer("Отправлено.")
+    except Exception:
+        log.exception("Ошибка отправки личного сообщения участнику")
+        await message.answer("⚠️ Не удалось отправить — участник мог заблокировать бота.")
+    await state.clear()
+
+
 @router.callback_query(F.data.startswith("rep_susp:"))
 async def report_susp(callback: CallbackQuery, bot: Bot):
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
         values = sheets.find_report_row(row)
+        participant_id = values[0]
         lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
 
         sheets.update_report_decision(row, "Подозрение на обман", lives_before, "Требуется ручная проверка организатором")
         await callback.message.edit_caption(caption=callback.message.caption + "\n\n⚠️ НА РУЧНОЙ ПРОВЕРКЕ")
+
+        tg_id = _get_participant_telegram_id(participant_id)
+        if tg_id:
+            await bot.send_message(
+                int(tg_id),
+                "⚠️ Организатор отметил твой отчёт как требующий дополнительной проверки.\n\n"
+                f"Если ты уверен, что тренировка настоящая — напиши организатору: {ORGANIZER_USERNAME}\n\n"
+                "Если до 23:59 сегодняшнего дня вопрос не будет решён, за этот день может быть "
+                "снята жизнь, как при незачтённом дне.",
+            )
     except Exception:
         log.exception("Ошибка в report_susp")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
