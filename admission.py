@@ -36,11 +36,32 @@ class AddressStates(StatesGroup):
     waiting_address = State()
 
 
+INSTRUCTION_LINK = "https://claude.ai/artifact/8Ftpcm5zBS3WF2gjXz3AeN"
+
+TRACKER_APPS_TEXT = (
+    "📱 <b>Установи приложение-трекер</b>, чтобы снимать скрин тренировки "
+    "с маршрутом, датой, временем и км. Подойдёт любое:\n"
+    "• Strava\n"
+    "• Nike Run Club\n"
+    "• Adidas Running\n"
+    "• Apple Здоровье (если iPhone)\n"
+    "• Google Fit (если Android)\n"
+)
+
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📝 Отправить отчёт")],
         [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="ℹ️ Правила")],
         [KeyboardButton(text="🆘 Написать организатору")],
+    ],
+    resize_keyboard=True,
+)
+
+# Клавиатура для тех, кто ещё не оплатил активный сезон — показываем кнопку оплаты.
+PAYMENT_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💳 Подтвердить оплату")],
+        [KeyboardButton(text="ℹ️ Правила"), KeyboardButton(text="🆘 Написать организатору")],
     ],
     resize_keyboard=True,
 )
@@ -86,13 +107,34 @@ async def cmd_start(message: Message, state: FSMContext):
         "Привет! Ты в боте сезона DBL — спортивного челленджа на 14 дней.\n\n"
         "Каждый день ты выполняешь норму (бег или ходьба), подтверждаешь тренировку. "
         "У тебя есть 3 жизни. Сохрани хотя бы одну до конца сезона — получишь медаль DBL.\n\n"
-        f"Подпишись на канал проекта, там новости и результаты: {CHANNEL_LINK}",
+        f"{TRACKER_APPS_TEXT}\n"
+        f"📖 <b>Полная пошаговая инструкция</b> — как зарегистрироваться, оплатить "
+        f"и отправлять отчёты каждый день:\n{INSTRUCTION_LINK}\n\n"
+        f"Канал проекта с новостями: {CHANNEL_LINK}",
         parse_mode="HTML",
+        reply_markup=PAYMENT_KEYBOARD,
     )
+    await message.answer(
+        "Когда будешь готов — нажми «💳 Подтвердить оплату», чтобы выбрать вид спорта, тариф и оплатить участие."
+    )
+
+
+@router.message(F.text == "💳 Подтвердить оплату")
+async def start_payment_flow(message: Message, state: FSMContext):
+    row, rec = sheets.find_participant_row(message.from_user.id)
+    if rec and rec.get("Статус оплаты") == "Оплачено":
+        await message.answer(
+            f"Ты уже оплатил участие. Твой номер: {rec.get('ID участника')}.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+    if rec and rec.get("Статус оплаты") == "Ожидает проверки":
+        await message.answer("Заявка уже на проверке у организатора. Жди подтверждения.")
+        return
 
     await state.set_state(OnboardingStates.choosing_sport)
     await message.answer(
-        "Теперь выбери вид спорта:",
+        "Выбери вид спорта:",
         reply_markup=sport_keyboard(),
     )
 
@@ -222,7 +264,9 @@ async def admission_no(callback: CallbackQuery, bot: Bot):
         sheets.set_participant_status(row, "Отклонено")
         await bot.send_message(
             int(telegram_id),
-            f"❌ Оплата не подтверждена. Напиши организатору лично: {ORGANIZER_USERNAME}",
+            f"❌ Оплата не подтверждена. Напиши организатору лично: {ORGANIZER_USERNAME}\n\n"
+            f"Если хочешь попробовать снова — нажми «💳 Подтвердить оплату».",
+            reply_markup=PAYMENT_KEYBOARD,
         )
         await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
     except Exception:
@@ -315,7 +359,10 @@ async def cmd_contact_organizer(message: Message):
     )
 
 
-MENU_BUTTONS = ("📝 Отправить отчёт", "👤 Профиль", "ℹ️ Правила", "🆘 Написать организатору")
+MENU_BUTTONS = (
+    "📝 Отправить отчёт", "👤 Профиль", "ℹ️ Правила", "🆘 Написать организатору",
+    "💳 Подтвердить оплату",
+)
 
 
 # ---------- Адрес доставки (после допуска по тарифу "С медалью") ----------
