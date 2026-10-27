@@ -26,7 +26,7 @@ class OnboardingStates(StatesGroup):
     waiting_payment_proof = State()
 class AddressStates(StatesGroup):
     waiting_address = State()
-INSTRUCTION_LINK = "https://claude.ai/artifact/8Ftpcm5zBS3WF2gjXz3AeN"
+INSTRUCTION_LINK = "https://quietly-divine-jay.tilda.ws/#section-instruction"
 TRACKER_APPS_TEXT = (
     "📱 <b>Установи приложение-трекер</b>, чтобы снимать скрин тренировки "
     "с маршрутом, датой, временем и км. Подойдёт любое:\n"
