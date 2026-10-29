@@ -26,6 +26,7 @@ PARTICIPANTS_HEADERS = [
     "ID участника", "Telegram/контакт", "Email", "Сезон", "Спорт", "Тариф",
     "Сумма оплаты, ₽", "Статус оплаты", "Дата оплаты", "Право на медаль",
     "Адрес получен?", "Дата отправки", "Трек-номер", "Примечания",
+    "Адрес доставки", "Согласие с офертой",
 ]
 
 REPORTS_HEADERS = [
@@ -38,7 +39,7 @@ PENDING_STATUSES = ("На проверке",)
 FINAL_STATUSES = ("Засчитано", "Не засчитано", "Подозрение на обман")
 MAX_ATTEMPTS_PER_DAY = 3
 
-SEASON_START_DATE = datetime.strptime("2026-10-27", "%Y-%m-%d")
+SEASON_START_DATE = datetime.strptime("2026-11-14", "%Y-%m-%d")
 
 
 def now_str():
@@ -79,11 +80,12 @@ def find_participant_row(telegram_id: str):
     return None, None
 
 
-def add_pending_participant(telegram_id: str, username: str, sport: str, tariff: str, price: int, season: str = "S01"):
+def add_pending_participant(telegram_id: str, username: str, sport: str, tariff: str, price: int,
+                             season: str = "S01", address: str = "", consent_at: str = ""):
     """
     Заполняет первую пустую заготовку (Telegram/контакт пуст, Сезон совпадает)
     или, если заготовок не осталось, добавляет новую строку в конец.
-    Записывает также спорт/тариф/сумму. Возвращает номер строки.
+    Записывает также спорт/тариф/сумму/адрес/согласие с офертой. Возвращает номер строки.
     """
     telegram_value = f"{telegram_id} ({username})"
     with _write_lock:
@@ -103,6 +105,10 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
             "Сумма оплаты, ₽": price,
             "Статус оплаты": "Ожидает проверки",
         }
+        if address:
+            values["Адрес доставки"] = address
+        if consent_at:
+            values["Согласие с офертой"] = consent_at
 
         if row_index is not None:
             for col_name, value in values.items():
@@ -112,10 +118,11 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
         row = [
             "", telegram_value, "", season, sport, tariff, price,
             "Ожидает проверки", "", "Не определено", "Нет", "", "", "",
+            address, consent_at,
         ]
         last_used = len(records) + 1  # +1 за заголовок
         row_index = last_used + 1
-        participants_ws.update(f"A{row_index}:N{row_index}", [row], value_input_option="USER_ENTERED")
+        participants_ws.update(f"A{row_index}:P{row_index}", [row], value_input_option="USER_ENTERED")
         return row_index
 
 
