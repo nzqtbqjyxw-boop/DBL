@@ -29,14 +29,57 @@ GROUP_LINK = "https://t.me/+sK53VEAlDwo3YzVi"
 class OnboardingStates(StatesGroup):
     choosing_sport = State()
     choosing_tariff = State()
+    waiting_address = State()
+    waiting_offer_consent = State()
     waiting_payment_proof = State()
 
 
-class AddressStates(StatesGroup):
-    waiting_address = State()
+OFFER_SHORT_TEXT = (
+    "📋 <b>Перед оплатой — коротко об условиях участия:</b>\n\n"
+    "• Участие — в 14-дневном спортивном сезоне DBL (бег/ходьба)\n"
+    "• Медаль (тариф «С медалью») отправляется после подведения итогов сезона "
+    "по адресу, который ты указал\n"
+    "• Твои данные (Telegram ID, адрес доставки) используются только для "
+    "организации сезона и не передаются третьим лицам\n"
+    "• Полные условия — кнопка «📄 Читать полностью» ниже\n\n"
+    "Нажимая «✅ Принимаю условия», ты подтверждаешь, что ознакомлен и согласен."
+)
+
+OFFER_FULL_TEXT = (
+    "📄 <b>Публичная оферта на участие в спортивном сезоне DBL (Do Better Life)</b>\n\n"
+    "<b>1. Предмет</b>\n"
+    "Участие в 14-дневном спортивном сезоне DBL. Участник выбирает вид спорта "
+    "(бег — минимум 2,5 км/день, ходьба — минимум 3 км/день) и тариф.\n\n"
+    "<b>2. Тарифы</b>\n"
+    "— Без медали — 500₽\n"
+    "— С медалью — 1100₽ (включает медаль и доставку по РФ)\n\n"
+    "<b>3. Условия участия</b>\n"
+    "У каждого участника 3 жизни. Подтверждение тренировки отправляется "
+    "ежедневно до 23:59 через Telegram-бот. Правила начисления/снятия жизней "
+    "и условия получения медали — в разделе «Правила» бота.\n\n"
+    "<b>4. Организатор</b>\n"
+    "Луночкина Юлия Анатольевна, самозанятая, ИНН 110404793883.\n"
+    "Контакт: @manchik_luts\n\n"
+    "<b>5. Оплата и отказ от участия</b>\n"
+    "Оплата производится до начала сезона через ЮKassa. После начала сезона "
+    "деньги не возвращаются; участник переносится на участие в следующем "
+    "сезоне бесплатно.\n\n"
+    "<b>6. Медаль и доставка</b>\n"
+    "Для тарифа «С медалью» адрес доставки собирается при регистрации. "
+    "Медаль отправляется после подведения итогов сезона.\n\n"
+    "<b>7. Персональные данные</b>\n"
+    "Организатор собирает: Telegram ID, username, адрес доставки (для тарифа "
+    "с медалью). Данные используются только для организации сезона и не "
+    "передаются третьим лицам.\n\n"
+    "<b>8. Ответственность</b>\n"
+    "DBL не является медицинской услугой. Участник самостоятельно оценивает "
+    "состояние своего здоровья перед участием в тренировках.\n\n"
+    "<b>9. Контакты</b>\n"
+    "По всем вопросам — @manchik_luts"
+)
 
 
-INSTRUCTION_LINK = "https://claude.ai/artifact/8Ftpcm5zBS3WF2gjXz3AeN"
+INSTRUCTION_LINK = "https://quietly-divine-jay.tilda.ws/#section-instruction"
 
 TRACKER_APPS_TEXT = (
     "📱 <b>Установи приложение-трекер</b>, чтобы снимать скрин тренировки "
@@ -108,8 +151,7 @@ async def cmd_start(message: Message, state: FSMContext):
         "Каждый день ты выполняешь норму (бег или ходьба), подтверждаешь тренировку. "
         "У тебя есть 3 жизни. Сохрани хотя бы одну до конца сезона — получишь медаль DBL.\n\n"
         f"{TRACKER_APPS_TEXT}\n"
-        f"📖 <b>Полная пошаговая инструкция</b> — как зарегистрироваться, оплатить "
-        f"и отправлять отчёты каждый день:\n{INSTRUCTION_LINK}\n\n"
+        f"📖 Полная пошаговая инструкция — в самом низу нашего сайта: {INSTRUCTION_LINK}\n\n"
         f"Канал проекта с новостями: {CHANNEL_LINK}",
         parse_mode="HTML",
         reply_markup=PAYMENT_KEYBOARD,
@@ -149,23 +191,73 @@ async def chosen_sport(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+def offer_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 Читать полностью", callback_data="offer_full")],
+        [InlineKeyboardButton(text="✅ Принимаю условия", callback_data="offer_accept")],
+    ])
+
+
 @router.callback_query(OnboardingStates.choosing_tariff, F.data.startswith("tariff:"))
 async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
     tariff = callback.data.split(":", 1)[1]
     price = PRICE_WITH_MEDAL if tariff == "С медалью" else PRICE_NO_MEDAL
-    link = PAYMENT_LINK_WITH_MEDAL if tariff == "С медалью" else PAYMENT_LINK_NO_MEDAL
     await state.update_data(tariff=tariff, price=price)
+
+    if tariff == "С медалью":
+        await state.set_state(OnboardingStates.waiting_address)
+        await callback.message.edit_text(
+            f"Тариф: {tariff} — {price}₽\n\n"
+            "Твой тариф включает медаль — укажи, пожалуйста, адрес доставки "
+            "(город, улица, дом, квартира, индекс, получатель)."
+        )
+        await callback.answer()
+        return
+
+    await state.set_state(OnboardingStates.waiting_offer_consent)
+    await callback.message.edit_text(f"Тариф: {tariff} — {price}₽")
+    await callback.message.answer(OFFER_SHORT_TEXT, parse_mode="HTML", reply_markup=offer_keyboard())
+    await callback.answer()
+
+
+@router.message(OnboardingStates.waiting_address, F.text)
+async def got_address(message: Message, state: FSMContext):
+    await state.update_data(address=message.text)
+    data = await state.get_data()
+    await state.set_state(OnboardingStates.waiting_offer_consent)
+    await message.answer(
+        f"Адрес сохранён: {message.text}\n\nТариф: {data.get('tariff')} — {data.get('price')}₽"
+    )
+    await message.answer(OFFER_SHORT_TEXT, parse_mode="HTML", reply_markup=offer_keyboard())
+
+
+@router.callback_query(OnboardingStates.waiting_offer_consent, F.data == "offer_full")
+async def offer_full(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(OFFER_FULL_TEXT, parse_mode="HTML", reply_markup=offer_keyboard())
+
+
+@router.callback_query(OnboardingStates.waiting_offer_consent, F.data == "offer_accept")
+async def offer_accept(callback: CallbackQuery, state: FSMContext):
+    await callback.answer("Принято")
+    consent_at = sheets.now_str()
+    await state.update_data(consent_at=consent_at)
+    data = await state.get_data()
+    tariff = data.get("tariff")
+    price = data.get("price")
+    link = PAYMENT_LINK_WITH_MEDAL if tariff == "С медалью" else PAYMENT_LINK_NO_MEDAL
+
     await state.set_state(OnboardingStates.waiting_payment_proof)
     pay_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=link)],
     ])
-    await callback.message.edit_text(
+    await callback.message.answer(
+        f"Спасибо! Условия приняты ({consent_at}).\n\n"
         f"Тариф: {tariff} — {price}₽\n\n"
         f"Нажми кнопку ниже, чтобы оплатить. После оплаты пришли сюда чек/скриншот "
         f"и укажи ФИО, которое использовал при оплате.",
         reply_markup=pay_kb,
     )
-    await callback.answer()
 
 
 async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
@@ -179,6 +271,8 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     sport = data.get("sport", "")
     tariff = data.get("tariff", "")
     price = data.get("price", "")
+    address = data.get("address", "")
+    consent_at = data.get("consent_at", "")
 
     row = sheets.add_pending_participant(
         telegram_id=message.from_user.id,
@@ -186,14 +280,19 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
         sport=sport,
         tariff=tariff,
         price=price,
+        address=address,
+        consent_at=consent_at,
     )
 
+    address_line = f"Адрес доставки: {address}\n" if address else ""
     caption = (
         f"Новая заявка на допуск\n"
         f"Telegram: @{message.from_user.username or '—'} ({message.from_user.id})\n"
         f"Имя: {message.from_user.full_name}\n"
         f"Спорт: {sport}\n"
         f"Тариф: {tariff} — {price}₽\n"
+        f"{address_line}"
+        f"Согласие с офертой: {consent_at or '—'}\n"
         f"Строка в таблице: {row}\n\n"
         f"{message.caption or ''}"
     )
@@ -236,12 +335,7 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
         )
 
         if tariff == "С медалью":
-            await bot.send_message(
-                int(telegram_id),
-                "Твой тариф включает медаль — пришли, пожалуйста, адрес доставки "
-                "(город, улица, дом, квартира, индекс, получатель).",
-            )
-            sheets.set_participant_field(row, "Адрес получен?", "Ожидается")
+            sheets.set_participant_field(row, "Адрес получен?", "Да")
 
         await callback.message.edit_caption(
             caption=callback.message.caption + f"\n\n✅ ПОДТВЕРЖДЕНО: {participant_id}"
@@ -316,8 +410,8 @@ async def cmd_profile(message: Message):
         f"Жизни: {hearts} ({lives}/3)\n"
     )
     if rec.get("Тариф") == "С медалью":
-        addr_status = rec.get("Адрес получен?", "Нет")
-        text += f"Адрес доставки: {addr_status}\n"
+        addr = rec.get("Адрес доставки") or "не указан"
+        text += f"Адрес доставки: {addr}\n"
     await message.answer(text, parse_mode="HTML")
 
 
@@ -363,22 +457,3 @@ MENU_BUTTONS = (
     "📝 Отправить отчёт", "👤 Профиль", "ℹ️ Правила", "🆘 Написать организатору",
     "💳 Подтвердить оплату",
 )
-
-
-# ---------- Адрес доставки (после допуска по тарифу "С медалью") ----------
-
-@router.message(F.text, _not_in_report_flow)
-async def catch_address(message: Message, bot: Bot):
-    """Если участник допущен по тарифу 'С медалью' и адрес ещё не получен —
-    любое его текстовое сообщение (кроме кнопок меню) считаем адресом."""
-    if message.text in MENU_BUTTONS:
-        return
-    row, rec = sheets.find_participant_row(message.from_user.id)
-    if rec and rec.get("Тариф") == "С медалью" and rec.get("Адрес получен?") == "Ожидается":
-        sheets.set_participant_field(row, "Адрес получен?", "Да")
-        sheets.set_participant_field(row, "Примечания", message.text)
-        await message.answer("Адрес сохранён, спасибо!", reply_markup=MAIN_KEYBOARD)
-        await bot.send_message(
-            ORGANIZER_CHAT_ID,
-            f"📍 Получен адрес доставки от {rec.get('ID участника')}:\n{message.text}",
-        )
