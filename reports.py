@@ -107,6 +107,7 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
     else:
         season_day = sheets.get_season_day()
         day_str = str(season_day) if season_day else ""
+        # ← распаковка в три переменные
         row, sent_at, attempt = sheets.add_report(
             participant_id=data["participant_id"],
             season=data["season"],
@@ -124,7 +125,7 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
         caption=(
             f"{'Повторный отчёт (был плохой скриншот)' if data.get('resend_bad') else 'Новый отчёт на проверку'}\n"
             f"Участник: {data['participant_id']}\n"
-            f"Дата тренировки: {today}\n"
+            f"Дата: {today}\n"
             f"Время отправки: {sent_at}\n"
             f"Попытка: {attempt}/{sheets.MAX_ATTEMPTS_PER_DAY}\n"
             f"Км: {km_display}\n"
@@ -134,133 +135,3 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
     )
     await message.answer(f"Отчёт отправлен на проверку организатору ({sent_at}).")
     await state.clear()
-
-
-def _get_participant_telegram_id(participant_id: str):
-    records = sheets.get_all_participants()
-    for rec in records:
-        if str(rec.get("ID участника")) == str(participant_id):
-            return str(rec.get("Telegram/контакт", "")).split(" ")[0]
-    return None
-
-
-@router.callback_query(F.data.startswith("rep_ok:"))
-async def report_ok(callback: CallbackQuery, bot: Bot):
-    await callback.answer("Обрабатываю...")
-    try:
-        row = int(callback.data.split(":")[1])
-        values = sheets.find_report_row(row)
-        participant_id = values[0]
-        lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
-        lives_after = lives_before
-
-        sheets.update_report_decision(row, "Засчитано", lives_after)
-
-        tg_id = _get_participant_telegram_id(participant_id)
-        if tg_id:
-            await bot.send_message(int(tg_id), "✅ Твой отчёт засчитан!")
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ЗАСЧИТАНО")
-    except Exception:
-        log.exception("Ошибка в report_ok")
-        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
-
-
-@router.callback_query(F.data.startswith("rep_no:"))
-async def report_no(callback: CallbackQuery, bot: Bot):
-    await callback.answer("Обрабатываю...")
-    try:
-        row = int(callback.data.split(":")[1])
-        values = sheets.find_report_row(row)
-        participant_id = values[0]
-        lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
-        lives_after = max(lives_before - 1, 0)
-
-        sheets.update_report_decision(row, "Не засчитано", lives_after)
-
-        tg_id = _get_participant_telegram_id(participant_id)
-        if tg_id:
-            await bot.send_message(
-                int(tg_id),
-                f"❌ Отчёт не засчитан. Осталось жизней: {lives_after}.\n"
-                f"Если считаешь, что это ошибка — напиши организатору лично: {ORGANIZER_USERNAME}",
-            )
-        await callback.message.edit_caption(caption=callback.message.caption + f"\n\n❌ НЕ ЗАСЧИТАНО (жизни: {lives_after})")
-    except Exception:
-        log.exception("Ошибка в report_no")
-        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
-
-
-@router.callback_query(F.data.startswith("rep_bad:"))
-async def report_bad(callback: CallbackQuery, bot: Bot):
-    await callback.answer("Обрабатываю...")
-    try:
-        row = int(callback.data.split(":")[1])
-        values = sheets.find_report_row(row)
-        participant_id = values[0]
-        lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
-
-        sheets.update_report_decision(row, "Плохой скриншот", lives_before, "Запрошена повторная отправка")
-
-        tg_id = _get_participant_telegram_id(participant_id)
-        if tg_id:
-            await bot.send_message(
-                int(tg_id),
-                "📷 Скриншот плохого качества — пришли, пожалуйста, более чёткое фото этой же тренировки через /report.",
-            )
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n📷 ПЛОХОЙ СКРИНШОТ")
-    except Exception:
-        log.exception("Ошибка в report_bad")
-        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
-
-
-@router.callback_query(F.data.startswith("rep_msg:"))
-async def report_msg_start(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    row = int(callback.data.split(":")[1])
-    values = sheets.find_report_row(row)
-    participant_id = values[0]
-    tg_id = _get_participant_telegram_id(participant_id)
-    if not tg_id:
-        await callback.message.answer("Не нашёл Telegram ID участника.")
-        return
-    await state.update_data(target_tg_id=tg_id, target_participant_id=participant_id)
-    await state.set_state(OrganizerMsgStates.waiting_text)
-    await callback.message.answer(f"Пришли текст для {participant_id} — отправлю от своего имени.")
-
-
-@router.message(OrganizerMsgStates.waiting_text, F.text)
-async def report_msg_send(message: Message, state: FSMContext, bot: Bot):
-    data = await state.get_data()
-    try:
-        await bot.send_message(int(data["target_tg_id"]), message.text)
-        await message.answer("Отправлено.")
-    except Exception:
-        log.exception("Ошибка отправки личного сообщения участнику")
-        await message.answer("⚠️ Не удалось отправить — участник мог заблокировать бота.")
-    await state.clear()
-
-
-@router.callback_query(F.data.startswith("rep_susp:"))
-async def report_susp(callback: CallbackQuery, bot: Bot):
-    await callback.answer("Обрабатываю...")
-    try:
-        row = int(callback.data.split(":")[1])
-        values = sheets.find_report_row(row)
-        participant_id = values[0]
-        lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
-
-        sheets.update_report_decision(row, "Подозрение на обман", lives_before, "Требуется ручная проверка организатором")
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n⚠️ НА РУЧНОЙ ПРОВЕРКЕ")
-
-        tg_id = _get_participant_telegram_id(participant_id)
-        if tg_id:
-            await bot.send_message(
-                int(tg_id),
-                "⚠️ Организатор отметил твой отчёт как требующий дополнительной проверки.\n\n"
-                f"Если ты уверен, что тренировка настоящая — напиши организатору: {ORGANIZER_USERNAME}\n\n"
-                "Если до 23:59 сегодняшнего дня вопрос не будет решён, за этот день может быть "
-                "снята жизнь, как при незачтённом дне.",
-            )
-    except Exception:
-        log.exception("Ошибка в report_susp")
-        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
