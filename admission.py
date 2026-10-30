@@ -151,7 +151,8 @@ async def cmd_start(message: Message, state: FSMContext):
         "Каждый день ты выполняешь норму (бег или ходьба), подтверждаешь тренировку. "
         "У тебя есть 3 жизни. Сохрани хотя бы одну до конца сезона — получишь медаль DBL.\n\n"
         f"{TRACKER_APPS_TEXT}\n"
-        f"📖 Полная пошаговая инструкция — в самом низу нашего сайта: {INSTRUCTION_LINK}\n\n"
+        f"📖 Полная пошаговая инструкция — пролистай сайт по ссылке до самого низа, "
+        f"там будет раздел «Инструкция участника»: {INSTRUCTION_LINK}\n\n"
         f"Канал проекта с новостями: {CHANNEL_LINK}",
         parse_mode="HTML",
         reply_markup=PAYMENT_KEYBOARD,
@@ -265,8 +266,22 @@ async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
     return current_state not in (ReportStates.waiting_photo.state, ReportStates.waiting_km.state)
 
 
-@router.message((F.photo | F.document), _not_in_report_flow, OnboardingStates.waiting_payment_proof)
+def _is_awaiting_payment_proof(message: Message, state_name) -> bool:
+    """True, если участник либо сейчас в FSM-состоянии ожидания чека (новый поток),
+    либо уже есть заявка со статусом 'Ожидает проверки' (после «Запросить ещё раз» —
+    тогда FSM уже очищен, но заявка в таблице ещё ждёт чек)."""
+    if state_name == OnboardingStates.waiting_payment_proof.state:
+        return True
+    _, rec = sheets.find_participant_row(message.from_user.id)
+    return bool(rec) and rec.get("Статус оплаты") == "Ожидает проверки"
+
+
+@router.message((F.photo | F.document), _not_in_report_flow)
 async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
+    current_state = await state.get_state()
+    if not _is_awaiting_payment_proof(message, current_state):
+        return  # фото не относится к оплате — пусть обработают другие хендлеры/ничего не делаем
+
     data = await state.get_data()
     sport = data.get("sport", "")
     tariff = data.get("tariff", "")
@@ -286,7 +301,10 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
 
     address_line = f"Адрес доставки: {address}\n" if address else ""
     caption = (
-        f"Новая заявка на допуск\n"
+        f"Заявка на допуск (повторная отправка чека)\n" if current_state != OnboardingStates.waiting_payment_proof.state
+        else f"Новая заявка на допуск\n"
+    )
+    caption += (
         f"Telegram: @{message.from_user.username or '—'} ({message.from_user.id})\n"
         f"Имя: {message.from_user.full_name}\n"
         f"Спорт: {sport}\n"
