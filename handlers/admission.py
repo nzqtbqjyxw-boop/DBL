@@ -146,6 +146,18 @@ async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
             message.chat.id, message.from_user.id, current_state,
         )
     return current_state not in (ReportStates.waiting_photo.state, ReportStates.waiting_km.state)
+
+
+@router.message(F.photo | F.document)
+async def _debug_any_photo(message: Message, state: FSMContext):
+    """ВРЕМЕННЫЙ диагностический хендлер — ставим ПЕРЕД остальными импортами в bot.py,
+    чтобы увидеть любое фото/документ, даже если остальные фильтры его не ловят."""
+    current_state = await state.get_state()
+    log.info(
+        "_debug_any_photo RAW HIT: chat_id=%s user_id=%s username=%s state=%s is_photo=%s is_doc=%s",
+        message.chat.id, message.from_user.id, message.from_user.username,
+        current_state, bool(message.photo), bool(message.document),
+    )
 @router.message((F.photo | F.document), _not_in_report_flow, OnboardingStates.waiting_payment_proof)
 async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     log.info("handle_payment_proof FIRED: chat_id=%s user_id=%s", message.chat.id, message.from_user.id)
