@@ -4,6 +4,7 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton,
@@ -229,14 +230,31 @@ async def admission_no(callback: CallbackQuery, bot: Bot):
         log.exception("Ошибка в admission_no")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
 @router.callback_query(F.data.startswith("adm_retry:"))
-async def admission_retry(callback: CallbackQuery, bot: Bot):
+async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
         rec = sheets.participants_ws.row_values(row)
-        idx = sheets.PARTICIPANTS_HEADERS.index("Telegram/контакт")
-        telegram_field = rec[idx] if len(rec) > idx else ""
+        def _col(name, default=""):
+            idx = sheets.PARTICIPANTS_HEADERS.index(name)
+            return rec[idx] if len(rec) > idx else default
+        telegram_field = _col("Telegram/контакт")
         telegram_id = telegram_field.split(" ")[0]
+        sport = _col("Спорт")
+        tariff = _col("Тариф")
+        price = _col("Сумма оплаты, ₽")
+
+        # Переводим FSM участника обратно в "жду чек", иначе handle_payment_proof
+        # не поймает повторное фото/документ — именно это было причиной бага.
+        participant_key = StorageKey(
+            bot_id=bot.id,
+            chat_id=int(telegram_id),
+            user_id=int(telegram_id),
+        )
+        participant_state = FSMContext(storage=state.storage, key=participant_key)
+        await participant_state.set_state(OnboardingStates.waiting_payment_proof)
+        await participant_state.update_data(sport=sport, tariff=tariff, price=price)
+
         await bot.send_message(
             int(telegram_id),
             "Пришли, пожалуйста, более чёткий чек/скриншот оплаты и ФИО.",
@@ -320,4 +338,3 @@ async def catch_address(message: Message, bot: Bot):
             ORGANIZER_CHAT_ID,
             f"📍 Получен адрес доставки от {rec.get('ID участника')}:\n{message.text}",
         )
-
