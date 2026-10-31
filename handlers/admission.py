@@ -140,9 +140,15 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
     current_state = await state.get_state()
+    if message.photo or message.document:
+        log.info(
+            "_not_in_report_flow CHECK: chat_id=%s user_id=%s current_state=%s",
+            message.chat.id, message.from_user.id, current_state,
+        )
     return current_state not in (ReportStates.waiting_photo.state, ReportStates.waiting_km.state)
 @router.message((F.photo | F.document), _not_in_report_flow, OnboardingStates.waiting_payment_proof)
 async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
+    log.info("handle_payment_proof FIRED: chat_id=%s user_id=%s", message.chat.id, message.from_user.id)
     data = await state.get_data()
     sport = data.get("sport", "")
     tariff = data.get("tariff", "")
@@ -254,6 +260,12 @@ async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
         participant_state = FSMContext(storage=state.storage, key=participant_key)
         await participant_state.set_state(OnboardingStates.waiting_payment_proof)
         await participant_state.update_data(sport=sport, tariff=tariff, price=price)
+        check_state = await participant_state.get_state()
+        check_data = await participant_state.get_data()
+        log.info(
+            "admission_retry SET STATE: telegram_id=%s key=%s state_after=%s data_after=%s",
+            telegram_id, participant_key, check_state, check_data,
+        )
 
         await bot.send_message(
             int(telegram_id),
