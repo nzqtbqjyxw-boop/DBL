@@ -46,12 +46,24 @@ async def cmd_report(message: Message, state: FSMContext):
 
     participant_id = rec.get("ID участника")
     today = date.today().isoformat()
-    _, status, _ = sheets.get_today_report_status(participant_id, today)
+    _, status, attempts = sheets.get_today_report_status(participant_id, today)
 
-    if status in ("На проверке", "Засчитано", "Не засчитано", "Подозрение на обман"):
+    if status == "На проверке":
         await message.answer(
-            "Отчёт за сегодня уже отправлен и обрабатывается или уже обработан. "
+            "⏳ Твой отчёт за сегодня уже на проверке у организатора. "
+            "Дождись решения, прежде чем отправлять новый."
+        )
+        return
+    if status in ("Засчитано", "Не засчитано", "Подозрение на обман"):
+        await message.answer(
+            "Отчёт за сегодня уже обработан. "
             f"Если считаешь, что это ошибка — напиши организатору: {ORGANIZER_USERNAME}"
+        )
+        return
+    if status != "Плохой скриншот" and attempts >= sheets.MAX_ATTEMPTS_PER_DAY:
+        await message.answer(
+            f"Ты уже использовал все {sheets.MAX_ATTEMPTS_PER_DAY} попытки отправить отчёт за сегодня. "
+            f"Напиши организатору: {ORGANIZER_USERNAME}"
         )
         return
     if status == "Плохой скриншот":
@@ -90,12 +102,14 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
     if data.get("resend_bad"):
         # Повторная отправка после "Плохой скриншот" — обновляем ту же строку, не создаём новую
         row, _, _ = sheets.get_today_report_status(data["participant_id"], today)
-        sheets.update_report_photo_and_status(row, file_id, "На проверке")
+        sent_at, attempt = sheets.update_report_photo_and_status(row, file_id, "На проверке")
         km_display = "—"
     else:
         season_day = sheets.get_season_day()
         day_str = str(season_day) if season_day else ""
-        row = sheets.add_report(
+        # add_report возвращает (row_index, sent_at, attempt_number) — распаковываем все три,
+        # иначе row становится кортежем и ломает callback_data кнопок (rep_ok/rep_no/...)
+        row, sent_at, attempt = sheets.add_report(
             participant_id=data["participant_id"],
             season=data["season"],
             day=day_str,
@@ -113,12 +127,14 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
             f"{'Повторный отчёт (был плохой скриншот)' if data.get('resend_bad') else 'Новый отчёт на проверку'}\n"
             f"Участник: {data['participant_id']}\n"
             f"Дата: {today}\n"
+            f"Время отправки: {sent_at}\n"
+            f"Попытка: {attempt}/{sheets.MAX_ATTEMPTS_PER_DAY}\n"
             f"Км: {km_display}\n"
             f"Строка: {row}"
         ),
         reply_markup=report_keyboard(row),
     )
-    await message.answer("Отчёт отправлен на проверку организатору.")
+    await message.answer(f"Отчёт отправлен на проверку организатору ({sent_at}).")
     await state.clear()
 
 
