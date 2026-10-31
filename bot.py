@@ -1,4 +1,4 @@
- import asyncio
+import asyncio
 import logging
 import os
 
@@ -16,13 +16,14 @@ log.setLevel(logging.WARNING)
 
 
 async def _log_every_update(handler, event, data):
-    """ВРЕМЕННЫЙ диагностический middleware — логирует ЛЮБОЙ Update целиком
-    (до любых роутеров/фильтров), чтобы понять, что реально приходит
-    в апдейтах, которые aiogram помечает как 'not handled'."""
+    """ВРЕМЕННЫЙ диагностический middleware."""
+    print("###RAW_UPDATE_MARKER###", flush=True)
+    log.warning("###RAW_UPDATE_MARKER_LOG###")
     try:
-        log.warning("RAW UPDATE IN: %s", event.model_dump_json(exclude_none=True)[:2000])
-    except Exception:
-        log.exception("Ошибка логирования RAW UPDATE")
+        upd_type = event.event_type if hasattr(event, "event_type") else "?"
+        print(f"###UPDATE_TYPE={upd_type}###", flush=True)
+    except Exception as e:
+        print(f"###UPDATE_TYPE_ERROR={e}###", flush=True)
     return await handler(event, data)
 
 
