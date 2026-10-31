@@ -141,7 +141,7 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
 async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
     current_state = await state.get_state()
     if message.photo or message.document:
-        log.info(
+        log.warning(
             "_not_in_report_flow CHECK: chat_id=%s user_id=%s current_state=%s",
             message.chat.id, message.from_user.id, current_state,
         )
@@ -151,16 +151,17 @@ async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
 @router.message(F.photo | F.document)
 async def _debug_any_photo(message: Message, state: FSMContext):
     """ВРЕМЕННЫЙ диагностический хендлер — ставим ПЕРЕД остальными импортами в bot.py,
-    чтобы увидеть любое фото/документ, даже если остальные фильтры его не ловят."""
+    чтобы увидеть любое фото/документ, даже если остальные фильтры его не ловят.
+    Используем log.warning (не info), т.к. уровень INFO где-то глушится другим basicConfig."""
     current_state = await state.get_state()
-    log.info(
+    log.warning(
         "_debug_any_photo RAW HIT: chat_id=%s user_id=%s username=%s state=%s is_photo=%s is_doc=%s",
         message.chat.id, message.from_user.id, message.from_user.username,
         current_state, bool(message.photo), bool(message.document),
     )
 @router.message((F.photo | F.document), _not_in_report_flow, OnboardingStates.waiting_payment_proof)
 async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
-    log.info("handle_payment_proof FIRED: chat_id=%s user_id=%s", message.chat.id, message.from_user.id)
+    log.warning("handle_payment_proof FIRED: chat_id=%s user_id=%s", message.chat.id, message.from_user.id)
     data = await state.get_data()
     sport = data.get("sport", "")
     tariff = data.get("tariff", "")
@@ -274,7 +275,7 @@ async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await participant_state.update_data(sport=sport, tariff=tariff, price=price)
         check_state = await participant_state.get_state()
         check_data = await participant_state.get_data()
-        log.info(
+        log.warning(
             "admission_retry SET STATE: telegram_id=%s key=%s state_after=%s data_after=%s",
             telegram_id, participant_key, check_state, check_data,
         )
