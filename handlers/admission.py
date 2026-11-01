@@ -140,7 +140,11 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
     current_state = await state.get_state()
-    return current_state not in (ReportStates.waiting_photo.state, ReportStates.waiting_km.state)
+    return current_state not in (
+        ReportStates.waiting_photo.state,
+        ReportStates.waiting_km.state,
+        OrganizerMsgStates.waiting_text.state,
+    )
 
 
 @router.message((F.photo | F.document), _not_in_report_flow, OnboardingStates.waiting_payment_proof)
@@ -333,9 +337,14 @@ MENU_BUTTONS = (
 )
 # ---------- Адрес доставки (после допуска по тарифу "С медалью") ----------
 @router.message(F.text, _not_in_report_flow)
-async def catch_address(message: Message, bot: Bot):
+async def catch_address(message: Message, state: FSMContext, bot: Bot):
     """Если участник допущен по тарифу 'С медалью' и адрес ещё не получен —
     любое его текстовое сообщение (кроме кнопок меню) считаем адресом."""
+    if message.from_user.id == ORGANIZER_CHAT_ID:
+        return
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
     if message.text in MENU_BUTTONS:
         return
     row, rec = sheets.find_participant_row(message.from_user.id)
