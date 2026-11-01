@@ -10,27 +10,12 @@ load_dotenv()
 
 from handlers import admission, reports, organizer  # noqa: E402
 
-logging.basicConfig(level=logging.WARNING, force=True)
-log = logging.getLogger("bot")
-log.setLevel(logging.WARNING)
-
-
-async def _log_every_update(handler, event, data):
-    """ВРЕМЕННЫЙ диагностический middleware."""
-    print("###RAW_UPDATE_MARKER###", flush=True)
-    log.warning("###RAW_UPDATE_MARKER_LOG###")
-    try:
-        upd_type = event.event_type if hasattr(event, "event_type") else "?"
-        print(f"###UPDATE_TYPE={upd_type}###", flush=True)
-    except Exception as e:
-        print(f"###UPDATE_TYPE_ERROR={e}###", flush=True)
-    return await handler(event, data)
+logging.basicConfig(level=logging.INFO, force=True)
 
 
 async def main():
     bot = Bot(token=os.environ["BOT_TOKEN"])
     dp = Dispatcher(storage=MemoryStorage())
-    dp.update.outer_middleware(_log_every_update)
     dp.include_router(admission.router)
     dp.include_router(reports.router)
     dp.include_router(organizer.router)
