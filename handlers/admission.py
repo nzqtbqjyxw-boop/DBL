@@ -149,13 +149,21 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     sport = data.get("sport", "")
     tariff = data.get("tariff", "")
     price = data.get("price", "")
-    row = sheets.add_pending_participant(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username or message.from_user.full_name,
-        sport=sport,
-        tariff=tariff,
-        price=price,
-    )
+    retry_row = data.get("retry_row")
+
+    if retry_row:
+        # Повторная отправка после "Запросить ещё раз" — обновляем ТУ ЖЕ строку,
+        # а не создаём новую (иначе появляется дубль участника).
+        row = retry_row
+        sheets.set_participant_status(row, "Ожидает проверки")
+    else:
+        row = sheets.add_pending_participant(
+            telegram_id=message.from_user.id,
+            username=message.from_user.username or message.from_user.full_name,
+            sport=sport,
+            tariff=tariff,
+            price=price,
+        )
     caption = (
         f"Новая заявка на допуск\n"
         f"Telegram: @{message.from_user.username or '—'} ({message.from_user.id})\n"
@@ -255,7 +263,7 @@ async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
         )
         participant_state = FSMContext(storage=state.storage, key=participant_key)
         await participant_state.set_state(OnboardingStates.waiting_payment_proof)
-        await participant_state.update_data(sport=sport, tariff=tariff, price=price)
+        await participant_state.update_data(sport=sport, tariff=tariff, price=price, retry_row=row)
         await bot.send_message(
             int(telegram_id),
             "Пришли, пожалуйста, более чёткий чек/скриншот оплаты и ФИО.",
