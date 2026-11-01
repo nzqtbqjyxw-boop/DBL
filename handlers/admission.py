@@ -10,7 +10,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
 )
 import sheets
-from handlers.reports import ReportStates
+from handlers.reports import ReportStates, OrganizerMsgStates
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
 ORGANIZER_USERNAME = "@manchik_luts"
@@ -45,7 +45,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
-# Клавиатура для тех, кто ещё не оплатил активный сезон — показываем кнопку оплаты.
 PAYMENT_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💳 Подтвердить оплату")],
@@ -145,8 +144,6 @@ async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
         ReportStates.waiting_km.state,
         OrganizerMsgStates.waiting_text.state,
     )
-
-
 @router.message((F.photo | F.document), _not_in_report_flow, OnboardingStates.waiting_payment_proof)
 async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
@@ -156,8 +153,6 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     retry_row = data.get("retry_row")
 
     if retry_row:
-        # Повторная отправка после "Запросить ещё раз" — обновляем ТУ ЖЕ строку,
-        # а не создаём новую (иначе появляется дубль участника).
         row = retry_row
         sheets.set_participant_status(row, "Ожидает проверки")
     else:
@@ -258,8 +253,6 @@ async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
         tariff = _col("Тариф")
         price = _col("Сумма оплаты, ₽")
 
-        # Переводим FSM участника обратно в "жду чек", иначе handle_payment_proof
-        # не поймает повторное фото/документ — именно это было причиной бага.
         participant_key = StorageKey(
             bot_id=bot.id,
             chat_id=int(telegram_id),
@@ -276,7 +269,6 @@ async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
     except Exception:
         log.exception("Ошибка в admission_retry")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
-# ---------- Профиль / Правила / кнопка отчёта ----------
 @router.message(F.text == "👤 Профиль")
 async def cmd_profile(message: Message):
     row, rec = sheets.find_participant_row(message.from_user.id)
@@ -335,15 +327,11 @@ MENU_BUTTONS = (
     "📝 Отправить отчёт", "👤 Профиль", "i️ Правила", "🆘 Написать организатору",
     "💳 Подтвердить оплату",
 )
-# ---------- Адрес доставки (после допуска по тарифу "С медалью") ----------
 @router.message(F.text, _not_in_report_flow)
 async def catch_address(message: Message, state: FSMContext, bot: Bot):
     """Если участник допущен по тарифу 'С медалью' и адрес ещё не получен —
     любое его текстовое сообщение (кроме кнопок меню) считаем адресом."""
     if message.from_user.id == ORGANIZER_CHAT_ID:
-        return
-    current_state = await state.get_state()
-    if current_state is not None:
         return
     if message.text in MENU_BUTTONS:
         return
