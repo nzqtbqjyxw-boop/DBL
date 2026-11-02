@@ -7,13 +7,21 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 import sheets
 
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
 log = logging.getLogger(__name__)
+
+ORGANIZER_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔍 Досмотреть")],
+        [KeyboardButton(text="📊 Статистика")],
+    ],
+    resize_keyboard=True,
+)
 
 
 def _is_organizer(message: Message) -> bool:
@@ -27,6 +35,7 @@ class BroadcastStates(StatesGroup):
 # ---------- /stats — статистика сезона ----------
 
 @router.message(Command("stats"))
+@router.message(F.text == "📊 Статистика")
 async def cmd_stats(message: Message):
     if not _is_organizer(message):
         return
@@ -56,7 +65,16 @@ async def cmd_stats(message: Message):
         f"Ждут проверки оплаты: {total_pending}\n"
         f"Выручка: {revenue}₽\n"
     )
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(text, parse_mode="HTML", reply_markup=ORGANIZER_KEYBOARD)
+
+
+# ---------- /start для организатора — показать клавиатуру ----------
+
+@router.message(Command("menu"))
+async def cmd_organizer_menu(message: Message):
+    if not _is_organizer(message):
+        return
+    await message.answer("Меню организатора:", reply_markup=ORGANIZER_KEYBOARD)
 
 
 # ---------- /broadcast — рассылка всем оплатившим (только по запросу) ----------
