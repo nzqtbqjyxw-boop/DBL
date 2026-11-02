@@ -3,12 +3,23 @@ import os
 from datetime import date
 
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 import sheets
+
+
+async def _safe_edit_caption(message, new_caption: str):
+    """Добавляет текст к подписи, но не падает, если Telegram говорит,
+    что содержимое не изменилось (повторное нажатие той же кнопки)."""
+    try:
+        await message.edit_caption(caption=new_caption)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
@@ -195,7 +206,7 @@ async def report_ok(callback: CallbackQuery, bot: Bot):
         tg_id = _get_participant_telegram_id(participant_id)
         if tg_id:
             await bot.send_message(int(tg_id), "✅ Твой отчёт засчитан!")
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ЗАСЧИТАНО")
+        await _safe_edit_caption(callback.message, callback.message.caption + "\n\n✅ ЗАСЧИТАНО")
     except Exception:
         log.exception("Ошибка в report_ok")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
@@ -221,7 +232,7 @@ async def report_no(callback: CallbackQuery, bot: Bot):
                 "Можешь прислать ещё один скриншот через «📝 Отправить отчёт» — "
                 f"или написать организатору: {ORGANIZER_USERNAME}",
             )
-        await callback.message.edit_caption(caption=callback.message.caption + f"\n\n❌ НЕ ЗАСЧИТАНО (жизни: {lives_after})")
+        await _safe_edit_caption(callback.message, callback.message.caption + f"\n\n❌ НЕ ЗАСЧИТАНО (жизни: {lives_after})")
     except Exception:
         log.exception("Ошибка в report_no")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
@@ -245,7 +256,7 @@ async def report_bad(callback: CallbackQuery, bot: Bot):
                 "📷 Скриншот плохого качества — пришли, пожалуйста, более чёткое фото этой же "
                 "тренировки через «📝 Отправить отчёт».",
             )
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n📷 ПЛОХОЙ СКРИНШОТ")
+        await _safe_edit_caption(callback.message, callback.message.caption + "\n\n📷 ПЛОХОЙ СКРИНШОТ")
     except Exception:
         log.exception("Ошибка в report_bad")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
@@ -288,7 +299,7 @@ async def report_susp(callback: CallbackQuery, bot: Bot):
         lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
 
         sheets.update_report_decision(row, "Подозрение на обман", lives_before, "Требуется ручная проверка организатором")
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n⚠️ НА РУЧНОЙ ПРОВЕРКЕ")
+        await _safe_edit_caption(callback.message, callback.message.caption + "\n\n⚠️ НА РУЧНОЙ ПРОВЕРКЕ")
 
         tg_id = _get_participant_telegram_id(participant_id)
         if tg_id:
