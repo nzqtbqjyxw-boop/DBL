@@ -10,7 +10,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
 )
 import sheets
-from handlers.reports import ReportStates, OrganizerMsgStates
+from handlers.reports import ReportStates, OrganizerMsgStates, _safe_edit_caption
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
 ORGANIZER_USERNAME = "@manchik_luts"
@@ -212,8 +212,8 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
                 "(город, улица, дом, квартира, индекс, получатель).",
             )
             sheets.set_participant_field(row, "Адрес получен?", "Ожидается")
-        await callback.message.edit_caption(
-            caption=callback.message.caption + f"\n\n✅ ПОДТВЕРЖДЕНО: {participant_id}"
+        await _safe_edit_caption(
+            callback.message, callback.message.caption + f"\n\n✅ ПОДТВЕРЖДЕНО: {participant_id}"
         )
     except Exception:
         log.exception("Ошибка в admission_ok")
@@ -234,7 +234,7 @@ async def admission_no(callback: CallbackQuery, bot: Bot):
             f"Если хочешь попробовать снова — нажми «💳 Подтвердить оплату».",
             reply_markup=PAYMENT_KEYBOARD,
         )
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
+        await _safe_edit_caption(callback.message, callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
     except Exception:
         log.exception("Ошибка в admission_no")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
@@ -265,7 +265,7 @@ async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
             int(telegram_id),
             "Пришли, пожалуйста, более чёткий чек/скриншот оплаты и ФИО.",
         )
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n🔁 ЗАПРОШЕНО ПОВТОРНО")
+        await _safe_edit_caption(callback.message, callback.message.caption + "\n\n🔁 ЗАПРОШЕНО ПОВТОРНО")
     except Exception:
         log.exception("Ошибка в admission_retry")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
@@ -338,7 +338,7 @@ async def catch_address(message: Message, state: FSMContext, bot: Bot):
     row, rec = sheets.find_participant_row(message.from_user.id)
     if rec and rec.get("Тариф") == "С медалью" and rec.get("Адрес получен?") == "Ожидается":
         sheets.set_participant_field(row, "Адрес получен?", "Да")
-        sheets.set_participant_field(row, "Примечания", message.text)
+        sheets.set_participant_field(row, "Адрес доставки", message.text)
         await message.answer("Адрес сохранён, спасибо!", reply_markup=MAIN_KEYBOARD)
         await bot.send_message(
             ORGANIZER_CHAT_ID,
