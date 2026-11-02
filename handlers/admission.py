@@ -40,7 +40,7 @@ TRACKER_APPS_TEXT = (
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📝 Отправить отчёт")],
-        [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="i️ Правила")],
+        [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="Правила")],
         [KeyboardButton(text="🆘 Написать организатору")],
     ],
     resize_keyboard=True,
@@ -48,7 +48,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 PAYMENT_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💳 Подтвердить оплату")],
-        [KeyboardButton(text="i️ Правила"), KeyboardButton(text="🆘 Написать организатору")],
+        [KeyboardButton(text="Правила"), KeyboardButton(text="🆘 Написать организатору")],
     ],
     resize_keyboard=True,
 )
@@ -291,7 +291,7 @@ async def cmd_profile(message: Message):
         addr_status = rec.get("Адрес получен?", "Нет")
         text += f"Адрес доставки: {addr_status}\n"
     await message.answer(text, parse_mode="HTML")
-@router.message(F.text == "i️ Правила")
+@router.message(F.text == "Правила")
 async def cmd_rules(message: Message):
     await message.answer(
         "📋 <b>Правила сезона DBL</b>\n\n"
@@ -324,7 +324,7 @@ async def cmd_contact_organizer(message: Message):
         "так быстрее разберёмся."
     )
 MENU_BUTTONS = (
-    "📝 Отправить отчёт", "👤 Профиль", "i️ Правила", "🆘 Написать организатору",
+    "📝 Отправить отчёт", "👤 Профиль", "Правила", "🆘 Написать организатору",
     "💳 Подтвердить оплату",
 )
 @router.message(F.text, ~F.text.startswith("/"), _not_in_report_flow)
