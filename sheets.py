@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -21,6 +21,8 @@ participants_ws = sh.worksheet("Участники")
 reports_ws = sh.worksheet("Отчёты")
 
 _write_lock = threading.Lock()
+
+MSK = timezone(timedelta(hours=3))
 
 PARTICIPANTS_HEADERS = [
     "ID участника", "Telegram/контакт", "Email", "Сезон", "Спорт", "Тариф",
@@ -43,12 +45,12 @@ SEASON_START_DATE = datetime.strptime("2026-11-14", "%Y-%m-%d")
 
 
 def now_str():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(MSK).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_season_day():
     """Возвращает день сезона (1-14) или None если сезон ещё не начался."""
-    today = datetime.now().date()
+    today = datetime.now(MSK).date()
     start = SEASON_START_DATE.date()
     if today < start:
         return None
@@ -174,8 +176,6 @@ def can_submit_report(participant_id: str, training_date: str):
     _, status, attempts = get_today_report_status(participant_id, training_date)
     if status in PENDING_STATUSES:
         return False, "pending"
-    if attempts >= MAX_ATTEMPTS_PER_DAY and status != "Плохой скриншот":
-        return False, "max_attempts"
     return True, None
 
 
