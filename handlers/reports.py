@@ -71,12 +71,6 @@ async def cmd_report(message: Message, state: FSMContext):
             f"Если считаешь, что это ошибка — напиши организатору: {ORGANIZER_USERNAME}"
         )
         return
-    if status in ("Не засчитано", "Подозрение на обман", "Плохой скриншот") and attempts >= sheets.MAX_ATTEMPTS_PER_DAY:
-        await message.answer(
-            f"Ты уже использовал все {sheets.MAX_ATTEMPTS_PER_DAY} попытки отправить отчёт за сегодня. "
-            f"Напиши организатору: {ORGANIZER_USERNAME}"
-        )
-        return
     if status in ("Не засчитано", "Подозрение на обман", "Плохой скриншот"):
         # Дополнительный скриншот к уже существующему отчёту за сегодня —
         # создаём НОВУЮ строку (не затираем предыдущую), организатор увидит оба.
@@ -135,7 +129,7 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
             f"Участник: {data['participant_id']}\n"
             f"Дата: {today}\n"
             f"Время отправки: {sent_at}\n"
-            f"Попытка: {attempt}/{sheets.MAX_ATTEMPTS_PER_DAY}\n"
+            f"Попытка: {attempt}\n"
             f"Км: {km_display}\n"
             f"Строка: {row}"
         ),
