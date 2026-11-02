@@ -327,10 +327,10 @@ MENU_BUTTONS = (
     "📝 Отправить отчёт", "👤 Профиль", "i️ Правила", "🆘 Написать организатору",
     "💳 Подтвердить оплату",
 )
-@router.message(F.text, _not_in_report_flow)
+@router.message(F.text, ~F.text.startswith("/"), _not_in_report_flow)
 async def catch_address(message: Message, state: FSMContext, bot: Bot):
     """Если участник допущен по тарифу 'С медалью' и адрес ещё не получен —
-    любое его текстовое сообщение (кроме кнопок меню) считаем адресом."""
+    любое его текстовое сообщение (кроме кнопок меню и команд) считаем адресом."""
     if message.from_user.id == ORGANIZER_CHAT_ID:
         return
     if message.text in MENU_BUTTONS:
