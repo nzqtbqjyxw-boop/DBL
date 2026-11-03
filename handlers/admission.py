@@ -16,17 +16,33 @@ ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
 ORGANIZER_USERNAME = "@manchik_luts"
 log = logging.getLogger(__name__)
 PRICE_NO_MEDAL = 500
-PRICE_WITH_MEDAL = 1100
+PRICE_WITH_MEDAL = 1490
 PAYMENT_LINK_NO_MEDAL = "https://yookassa.ru/my/i/atKmjoB8TKJB/l"
-PAYMENT_LINK_WITH_MEDAL = "https://yookassa.ru/my/i/atKnClymrePv/l"
+# ВАЖНО: эта ссылка в кабинете ЮKassa всё ещё может быть настроена на 1100₽.
+# Нужно создать/проверить в ЮKassa ссылку на 1490₽ и подставить её сюда.
+PAYMENT_LINK_WITH_MEDAL = "https://yookassa.ru/my/i/auhWxZqv8jGa/l"
 CHANNEL_LINK = "https://t.me/DBL_Better_life"
 GROUP_LINK = "https://t.me/+sK53VEAlDwo3YzVi"
+
+OFFER_LINK = "https://telegra.ph/PUBLICHNAYA-OFERTA-11-03-27"
+PRIVACY_POLICY_LINK = "https://telegra.ph/POLITIKA-OBRABOTKI-PERSONALNYH-DANNYH-DBL-11-03"
+PD_CONSENT_LINK = "https://telegra.ph/SOGLASIE-NA-OBRABOTKU-PERSONALNYH-DANNYH-DBL-11-03"
+PARENT_CONSENT_LINK = "https://telegra.ph/SOGLASIE-ZAKONNOGO-PREDSTAVITELYA-NA-UCHASTIE-NESOVERSHENNOLETNEGO-V-PROEKTE-DBL-11-03"
+
+
 class OnboardingStates(StatesGroup):
+    choosing_age = State()
+    waiting_parent_consent_photo = State()
+    accepting_documents = State()
     choosing_sport = State()
     choosing_tariff = State()
     waiting_payment_proof = State()
+
+
 class AddressStates(StatesGroup):
     waiting_address = State()
+
+
 INSTRUCTION_LINK = "https://quietly-divine-jay.tilda.ws/#section-instruction"
 TRACKER_APPS_TEXT = (
     "📱 <b>Установи приложение-трекер</b>, чтобы снимать скрин тренировки "
@@ -52,22 +68,51 @@ PAYMENT_KEYBOARD = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
+
+
+def age_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Мне есть 18", callback_data="age:adult")],
+        [InlineKeyboardButton(text="Мне 14–17", callback_data="age:teen")],
+    ])
+
+
+def documents_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Принимаю все условия", callback_data="docs:accept")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="docs:cancel")],
+    ])
+
+
 def sport_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏃 Бег (мин 2,5 км/день)", callback_data="sport:Бег")],
         [InlineKeyboardButton(text="🚶 Ходьба (мин 3 км/день)", callback_data="sport:Ходьба")],
     ])
+
+
 def tariff_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"Без медали — {PRICE_NO_MEDAL}₽", callback_data="tariff:Без медали")],
         [InlineKeyboardButton(text=f"С медалью — {PRICE_WITH_MEDAL}₽", callback_data="tariff:С медалью")],
     ])
+
+
 def admission_keyboard(row_index: int):
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"adm_ok:{row_index}"),
         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_no:{row_index}"),
         InlineKeyboardButton(text="🔁 Запросить ещё раз", callback_data=f"adm_retry:{row_index}"),
     ]])
+
+
+def parent_consent_keyboard(row_index: int):
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Согласие получено", callback_data=f"pc_ok:{row_index}"),
+        InlineKeyboardButton(text="🔁 Запросить повторно", callback_data=f"pc_retry:{row_index}"),
+    ]])
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     row, rec = sheets.find_participant_row(message.from_user.id)
@@ -95,6 +140,8 @@ async def cmd_start(message: Message, state: FSMContext):
     await message.answer(
         "Когда будешь готов — нажми «💳 Подтвердить оплату», чтобы выбрать вид спорта, тариф и оплатить участие."
     )
+
+
 @router.message(F.text == "💳 Подтвердить оплату")
 async def start_payment_flow(message: Message, state: FSMContext):
     row, rec = sheets.find_participant_row(message.from_user.id)
@@ -107,11 +154,170 @@ async def start_payment_flow(message: Message, state: FSMContext):
     if rec and rec.get("Статус оплаты") == "Ожидает проверки":
         await message.answer("Заявка уже на проверке у организатора. Жди подтверждения.")
         return
-    await state.set_state(OnboardingStates.choosing_sport)
+    # если согласие родителя уже когда-то получено для этого участника — не спрашиваем возраст снова
+    if rec and str(rec.get("Согласие родителя (14-17, да/нет)", "")).strip().lower() == "да":
+        await state.set_state(OnboardingStates.accepting_documents)
+        await _send_documents(message)
+        return
+    await state.set_state(OnboardingStates.choosing_age)
     await message.answer(
-        "Выбери вид спорта:",
-        reply_markup=sport_keyboard(),
+        "Прежде чем продолжить — укажи свой возраст:",
+        reply_markup=age_keyboard(),
     )
+
+
+@router.callback_query(OnboardingStates.choosing_age, F.data.startswith("age:"))
+async def chosen_age(callback: CallbackQuery, state: FSMContext):
+    age_choice = callback.data.split(":", 1)[1]
+    await state.update_data(age_choice=age_choice)
+    if age_choice == "adult":
+        await state.set_state(OnboardingStates.accepting_documents)
+        await callback.message.edit_text("Принято.")
+        await _send_documents(callback.message)
+        await callback.answer()
+        return
+
+    # 14-17 лет
+    await state.set_state(OnboardingStates.waiting_parent_consent_photo)
+    await callback.message.edit_text(
+        "Участие с 14 до 17 лет возможно только при согласии родителя "
+        "(законного представителя).\n\n"
+        f"📄 Форма согласия: {PARENT_CONSENT_LINK}\n\n"
+        "Распечатать необязательно — можно переписать текст от руки на обычном листе "
+        "(ФИО ребёнка, дата рождения, согласие, дата, подпись родителя).\n\n"
+        "Когда родитель заполнит и подпишет — пришли сюда фото или скан документа."
+    )
+    await callback.answer()
+
+
+@router.message(OnboardingStates.waiting_parent_consent_photo, F.photo | F.document)
+async def handle_parent_consent_photo(message: Message, state: FSMContext, bot: Bot):
+    row, rec = sheets.find_participant_row(message.from_user.id)
+    if row is None:
+        row = sheets.add_pending_participant(
+            telegram_id=message.from_user.id,
+            username=message.from_user.username or message.from_user.full_name,
+            sport="", tariff="", price="",
+        )
+        sheets.set_participant_status(row, "Ожидает проверки (согласие родителя)")
+
+    caption = (
+        f"Согласие родителя — @{message.from_user.username or '—'} "
+        f"({message.from_user.id})\n"
+        f"Имя: {message.from_user.full_name}\n"
+        f"Строка в таблице: {row}"
+    )
+    if message.photo:
+        await bot.send_photo(
+            ORGANIZER_CHAT_ID, message.photo[-1].file_id,
+            caption=caption, reply_markup=parent_consent_keyboard(row),
+        )
+    else:
+        await bot.send_document(
+            ORGANIZER_CHAT_ID, message.document.file_id,
+            caption=caption, reply_markup=parent_consent_keyboard(row),
+        )
+    await message.answer(
+        "Фото отправлено организатору на проверку. Жди подтверждения — "
+        "после него продолжим регистрацию."
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("pc_ok:"))
+async def parent_consent_ok(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await callback.answer("Обрабатываю...")
+    try:
+        row = int(callback.data.split(":")[1])
+        rec = sheets.participants_ws.row_values(row)
+
+        def _col(name, default=""):
+            idx = sheets.PARTICIPANTS_HEADERS.index(name)
+            return rec[idx] if len(rec) > idx else default
+
+        telegram_field = _col("Telegram/контакт")
+        telegram_id = telegram_field.split(" ")[0]
+        sheets.set_participant_field(row, "Согласие родителя (14-17, да/нет)", "Да")
+
+        participant_key = StorageKey(bot_id=bot.id, chat_id=int(telegram_id), user_id=int(telegram_id))
+        participant_state = FSMContext(storage=state.storage, key=participant_key)
+        await participant_state.set_state(OnboardingStates.accepting_documents)
+
+        await bot.send_message(
+            int(telegram_id),
+            "✅ Согласие родителя подтверждено! Теперь нужно принять условия участия.",
+        )
+        await _send_documents_by_bot(bot, int(telegram_id))
+        await _safe_edit_caption(callback.message, callback.message.caption + "\n\n✅ СОГЛАСИЕ ПОДТВЕРЖДЕНО")
+    except Exception:
+        log.exception("Ошибка в parent_consent_ok")
+        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
+
+
+@router.callback_query(F.data.startswith("pc_retry:"))
+async def parent_consent_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await callback.answer("Обрабатываю...")
+    try:
+        row = int(callback.data.split(":")[1])
+        rec = sheets.participants_ws.row_values(row)
+        idx = sheets.PARTICIPANTS_HEADERS.index("Telegram/контакт")
+        telegram_field = rec[idx] if len(rec) > idx else ""
+        telegram_id = telegram_field.split(" ")[0]
+
+        participant_key = StorageKey(bot_id=bot.id, chat_id=int(telegram_id), user_id=int(telegram_id))
+        participant_state = FSMContext(storage=state.storage, key=participant_key)
+        await participant_state.set_state(OnboardingStates.waiting_parent_consent_photo)
+
+        await bot.send_message(
+            int(telegram_id),
+            "Фото согласия плохо видно или заполнено не полностью. "
+            "Пришли, пожалуйста, более чёткое фото документа ещё раз.",
+        )
+        await _safe_edit_caption(callback.message, callback.message.caption + "\n\n🔁 ЗАПРОШЕНО ПОВТОРНО")
+    except Exception:
+        log.exception("Ошибка в parent_consent_retry")
+        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
+
+
+async def _send_documents(message: Message):
+    await message.answer(
+        "Перед оплатой ознакомься с документами:\n\n"
+        f"📄 Публичная оферта: {OFFER_LINK}\n"
+        f"🔒 Политика обработки персональных данных: {PRIVACY_POLICY_LINK}\n"
+        f"✅ Согласие на обработку персональных данных: {PD_CONSENT_LINK}",
+        reply_markup=documents_keyboard(),
+    )
+
+
+async def _send_documents_by_bot(bot: Bot, telegram_id: int):
+    await bot.send_message(
+        telegram_id,
+        "Перед оплатой ознакомься с документами:\n\n"
+        f"📄 Публичная оферта: {OFFER_LINK}\n"
+        f"🔒 Политика обработки персональных данных: {PRIVACY_POLICY_LINK}\n"
+        f"✅ Согласие на обработку персональных данных: {PD_CONSENT_LINK}",
+        reply_markup=documents_keyboard(),
+    )
+
+
+@router.callback_query(OnboardingStates.accepting_documents, F.data == "docs:accept")
+async def documents_accepted(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(docs_accepted_at=sheets.now_str())
+    await state.set_state(OnboardingStates.choosing_sport)
+    await callback.message.edit_text("Условия приняты. Выбери вид спорта:")
+    await callback.message.answer("Вид спорта:", reply_markup=sport_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(OnboardingStates.accepting_documents, F.data == "docs:cancel")
+async def documents_cancelled(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text(
+        "Хорошо, регистрация отменена. Когда будешь готов — нажми «💳 Подтвердить оплату» ещё раз."
+    )
+    await callback.answer()
+
+
 @router.callback_query(OnboardingStates.choosing_sport, F.data.startswith("sport:"))
 async def chosen_sport(callback: CallbackQuery, state: FSMContext):
     sport = callback.data.split(":", 1)[1]
@@ -120,6 +326,8 @@ async def chosen_sport(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(f"Вид спорта: {sport}\n\nТеперь выбери тариф:")
     await callback.message.answer("Тариф:", reply_markup=tariff_keyboard())
     await callback.answer()
+
+
 @router.callback_query(OnboardingStates.choosing_tariff, F.data.startswith("tariff:"))
 async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
     tariff = callback.data.split(":", 1)[1]
@@ -137,6 +345,8 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
         reply_markup=pay_kb,
     )
     await callback.answer()
+
+
 async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
     current_state = await state.get_state()
     return current_state not in (
@@ -144,6 +354,8 @@ async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
         ReportStates.waiting_km.state,
         OrganizerMsgStates.waiting_text.state,
     )
+
+
 @router.message((F.photo | F.document), _not_in_report_flow, OnboardingStates.waiting_payment_proof)
 async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
@@ -151,10 +363,15 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     tariff = data.get("tariff", "")
     price = data.get("price", "")
     retry_row = data.get("retry_row")
+    consent_at = data.get("docs_accepted_at", "")
+    age_choice = data.get("age_choice", "")
 
     if retry_row:
         row = retry_row
         sheets.set_participant_status(row, "Ожидает проверки")
+        if consent_at:
+            sheets.set_participant_field(row, "Согласие с офертой", consent_at)
+            sheets.set_participant_field(row, "Согласие на обработку ПДн", consent_at)
     else:
         row = sheets.add_pending_participant(
             telegram_id=message.from_user.id,
@@ -162,7 +379,13 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
             sport=sport,
             tariff=tariff,
             price=price,
+            consent_at=consent_at,
         )
+        if consent_at:
+            sheets.set_participant_field(row, "Согласие на обработку ПДн", consent_at)
+        if age_choice == "teen":
+            sheets.set_participant_field(row, "Согласие родителя (14-17, да/нет)", "Да")
+
     caption = (
         f"Новая заявка на допуск\n"
         f"Telegram: @{message.from_user.username or '—'} ({message.from_user.id})\n"
@@ -184,15 +407,19 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
         )
     await message.answer("Заявка отправлена организатору на проверку. Жди подтверждения.")
     await state.clear()
+
+
 @router.callback_query(F.data.startswith("adm_ok:"))
 async def admission_ok(callback: CallbackQuery, bot: Bot):
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
         rec = sheets.participants_ws.row_values(row)
+
         def _col(name, default=""):
             idx = sheets.PARTICIPANTS_HEADERS.index(name)
             return rec[idx] if len(rec) > idx else default
+
         telegram_field = _col("Telegram/контакт")
         telegram_id = telegram_field.split(" ")[0]
         tariff = _col("Тариф")
@@ -218,6 +445,8 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
     except Exception:
         log.exception("Ошибка в admission_ok")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
+
+
 @router.callback_query(F.data.startswith("adm_no:"))
 async def admission_no(callback: CallbackQuery, bot: Bot):
     await callback.answer("Обрабатываю...")
@@ -238,15 +467,19 @@ async def admission_no(callback: CallbackQuery, bot: Bot):
     except Exception:
         log.exception("Ошибка в admission_no")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
+
+
 @router.callback_query(F.data.startswith("adm_retry:"))
 async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
         rec = sheets.participants_ws.row_values(row)
+
         def _col(name, default=""):
             idx = sheets.PARTICIPANTS_HEADERS.index(name)
             return rec[idx] if len(rec) > idx else default
+
         telegram_field = _col("Telegram/контакт")
         telegram_id = telegram_field.split(" ")[0]
         sport = _col("Спорт")
@@ -269,6 +502,8 @@ async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
     except Exception:
         log.exception("Ошибка в admission_retry")
         await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
+
+
 @router.message(F.text == "👤 Профиль")
 async def cmd_profile(message: Message):
     row, rec = sheets.find_participant_row(message.from_user.id)
@@ -291,6 +526,8 @@ async def cmd_profile(message: Message):
         addr_status = rec.get("Адрес получен?", "Нет")
         text += f"Адрес доставки: {addr_status}\n"
     await message.answer(text, parse_mode="HTML")
+
+
 @router.message(F.text == "Правила")
 async def cmd_rules(message: Message):
     await message.answer(
@@ -310,10 +547,14 @@ async def cmd_rules(message: Message):
         f"Вопросы — организатору: {ORGANIZER_USERNAME}",
         parse_mode="HTML",
     )
+
+
 @router.message(F.text == "📝 Отправить отчёт")
 async def cmd_report_button(message: Message, state: FSMContext):
     from handlers.reports import cmd_report
     await cmd_report(message, state)
+
+
 @router.message(Command("help"))
 @router.message(F.text == "🆘 Написать организатору")
 async def cmd_contact_organizer(message: Message):
@@ -323,10 +564,14 @@ async def cmd_contact_organizer(message: Message):
         "Опиши ситуацию и, если есть, свой номер участника (DBL S01-XXXX) — "
         "так быстрее разберёмся."
     )
+
+
 MENU_BUTTONS = (
     "📝 Отправить отчёт", "👤 Профиль", "Правила", "🆘 Написать организатору",
     "💳 Подтвердить оплату",
 )
+
+
 @router.message(F.text, ~F.text.startswith("/"), _not_in_report_flow)
 async def catch_address(message: Message, state: FSMContext, bot: Bot):
     """Если участник допущен по тарифу 'С медалью' и адрес ещё не получен —
