@@ -29,6 +29,7 @@ PARTICIPANTS_HEADERS = [
     "Сумма оплаты, ₽", "Статус оплаты", "Дата оплаты", "Право на медаль",
     "Адрес получен?", "Дата отправки", "Трек-номер", "Примечания",
     "Адрес доставки", "Согласие с офертой",
+    "Согласие на обработку ПДн (дата/время)", "Согласие родителя (14-17, да/нет)",
 ]
 
 REPORTS_HEADERS = [
@@ -43,6 +44,10 @@ MAX_ATTEMPTS_PER_DAY = 3
 
 SEASON_START_DATE = datetime.strptime("2026-11-14", "%Y-%m-%d")
 
+# Последняя колонка листа "Участники" в A1-нотации (должна соответствовать
+# длине PARTICIPANTS_HEADERS). Сейчас 18 колонок -> R.
+PARTICIPANTS_LAST_COL = "R"
+
 
 def now_str():
     return datetime.now(MSK).strftime("%Y-%m-%d %H:%M:%S")
@@ -56,6 +61,15 @@ def get_season_day():
         return None
     day = (today - start).days + 1
     return day if day <= 14 else None
+
+
+def _norm(value) -> str:
+    """Нормализует значение для регистронезависимого сравнения (да/нет и т.п.)."""
+    return str(value or "").strip().lower()
+
+
+def is_yes(value) -> bool:
+    return _norm(value) in ("да", "yes", "true", "1")
 
 
 # ---------- Участники ----------
@@ -83,11 +97,15 @@ def find_participant_row(telegram_id: str):
 
 
 def add_pending_participant(telegram_id: str, username: str, sport: str, tariff: str, price: int,
-                             season: str = "S01", address: str = "", consent_at: str = ""):
+                             season: str = "S01", address: str = "", consent_at: str = "",
+                             pdn_consent_at: str = "", is_minor: bool = False):
     """
     Заполняет первую пустую заготовку (Telegram/контакт пуст, Сезон совпадает)
     или, если заготовок не осталось, добавляет новую строку в конец.
-    Записывает также спорт/тариф/сумму/адрес/согласие с офертой. Возвращает номер строки.
+    Записывает также спорт/тариф/сумму/адрес/согласие с офертой/согласие на ПДн.
+    Если участник несовершеннолетний (14-17), колонка "Согласие родителя" ставится
+    в "Ожидается" — пустая строка означает "вопрос ещё не возникал" (18+).
+    Возвращает номер строки.
     """
     telegram_value = f"{telegram_id} ({username})"
     with _write_lock:
@@ -111,6 +129,10 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
             values["Адрес доставки"] = address
         if consent_at:
             values["Согласие с офертой"] = consent_at
+        if pdn_consent_at:
+            values["Согласие на обработку ПДн (дата/время)"] = pdn_consent_at
+        if is_minor:
+            values["Согласие родителя (14-17, да/нет)"] = "Ожидается"
 
         if row_index is not None:
             for col_name, value in values.items():
@@ -120,11 +142,15 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
         row = [
             "", telegram_value, "", season, sport, tariff, price,
             "Ожидает проверки", "", "Не определено", "Нет", "", "", "",
-            address, consent_at,
+            address, consent_at, pdn_consent_at,
+            "Ожидается" if is_minor else "",
         ]
         last_used = len(records) + 1  # +1 за заголовок
         row_index = last_used + 1
-        participants_ws.update(f"A{row_index}:P{row_index}", [row], value_input_option="USER_ENTERED")
+        participants_ws.update(
+            f"A{row_index}:{PARTICIPANTS_LAST_COL}{row_index}",
+            [row], value_input_option="USER_ENTERED",
+        )
         return row_index
 
 
@@ -135,6 +161,15 @@ def set_participant_status(row_index: int, status: str, participant_id: str = No
     for col_name, value in updates.items():
         col = PARTICIPANTS_HEADERS.index(col_name) + 1
         participants_ws.update_cell(row_index, col, value)
+
+
+def has_parent_consent(rec: dict) -> bool:
+    """True, если согласие родителя не требуется (поле пустое, участник 18+)
+    либо получено и подтверждено организатором."""
+    value = rec.get("Согласие родителя (14-17, да/нет)", "")
+    if value == "":
+        return True
+    return is_yes(value)
 
 
 def get_lives(participant_id: str) -> int:
