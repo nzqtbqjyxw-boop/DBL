@@ -18,8 +18,6 @@ log = logging.getLogger(__name__)
 PRICE_NO_MEDAL = 500
 PRICE_WITH_MEDAL = 1490
 PAYMENT_LINK_NO_MEDAL = "https://yookassa.ru/my/i/atKmjoB8TKJB/l"
-# ВАЖНО: эта ссылка в кабинете ЮKassa всё ещё может быть настроена на 1100₽.
-# Нужно создать/проверить в ЮKassa ссылку на 1490₽ и подставить её сюда.
 PAYMENT_LINK_WITH_MEDAL = "https://yookassa.ru/my/i/auhWxZqv8jGa/l"
 CHANNEL_LINK = "https://t.me/DBL_Better_life"
 GROUP_LINK = "https://t.me/+sK53VEAlDwo3YzVi"
@@ -28,6 +26,28 @@ OFFER_LINK = "https://telegra.ph/PUBLICHNAYA-OFERTA-11-03-27"
 PRIVACY_POLICY_LINK = "https://telegra.ph/POLITIKA-OBRABOTKI-PERSONALNYH-DANNYH-DBL-11-03"
 PD_CONSENT_LINK = "https://telegra.ph/SOGLASIE-NA-OBRABOTKU-PERSONALNYH-DANNYH-DBL-11-03"
 PARENT_CONSENT_LINK = "https://telegra.ph/SOGLASIE-ZAKONNOGO-PREDSTAVITELYA-NA-UCHASTIE-NESOVERSHENNOLETNEGO-V-PROEKTE-DBL-11-03"
+
+# Простая защита от повторной обработки одного и того же нажатия кнопки:
+# если Railway на миг поднимает два процесса бота одновременно (перекрытие при
+# деплое), Telegram может доставить один и тот же callback дважды. Храним id
+# уже обработанных callback'ов в памяти процесса (последние ~500) и игнорируем повтор.
+_PROCESSED_CALLBACKS: set[str] = set()
+_PROCESSED_CALLBACKS_ORDER: list[str] = []
+_MAX_PROCESSED_CALLBACKS = 500
+
+
+def _already_processed(callback_id: str) -> bool:
+    """True, если этот callback.id уже обрабатывался — тогда его нужно просто
+    проигнорировать (но не забыть ответить callback.answer, иначе у человека
+    будет крутиться часики на кнопке)."""
+    if callback_id in _PROCESSED_CALLBACKS:
+        return True
+    _PROCESSED_CALLBACKS.add(callback_id)
+    _PROCESSED_CALLBACKS_ORDER.append(callback_id)
+    if len(_PROCESSED_CALLBACKS_ORDER) > _MAX_PROCESSED_CALLBACKS:
+        oldest = _PROCESSED_CALLBACKS_ORDER.pop(0)
+        _PROCESSED_CALLBACKS.discard(oldest)
+    return False
 
 
 class OnboardingStates(StatesGroup):
@@ -168,6 +188,9 @@ async def start_payment_flow(message: Message, state: FSMContext):
 
 @router.callback_query(OnboardingStates.choosing_age, F.data.startswith("age:"))
 async def chosen_age(callback: CallbackQuery, state: FSMContext):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     age_choice = callback.data.split(":", 1)[1]
     await state.update_data(age_choice=age_choice)
     if age_choice == "adult":
@@ -226,6 +249,9 @@ async def handle_parent_consent_photo(message: Message, state: FSMContext, bot: 
 
 @router.callback_query(F.data.startswith("pc_ok:"))
 async def parent_consent_ok(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
@@ -256,6 +282,9 @@ async def parent_consent_ok(callback: CallbackQuery, bot: Bot, state: FSMContext
 
 @router.callback_query(F.data.startswith("pc_retry:"))
 async def parent_consent_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
@@ -302,6 +331,9 @@ async def _send_documents_by_bot(bot: Bot, telegram_id: int):
 
 @router.callback_query(OnboardingStates.accepting_documents, F.data == "docs:accept")
 async def documents_accepted(callback: CallbackQuery, state: FSMContext):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     await state.update_data(docs_accepted_at=sheets.now_str())
     await state.set_state(OnboardingStates.choosing_sport)
     await callback.message.edit_text("Условия приняты. Выбери вид спорта:")
@@ -311,6 +343,9 @@ async def documents_accepted(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(OnboardingStates.accepting_documents, F.data == "docs:cancel")
 async def documents_cancelled(callback: CallbackQuery, state: FSMContext):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     await state.clear()
     await callback.message.edit_text(
         "Хорошо, регистрация отменена. Когда будешь готов — нажми «💳 Подтвердить оплату» ещё раз."
@@ -320,6 +355,9 @@ async def documents_cancelled(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(OnboardingStates.choosing_sport, F.data.startswith("sport:"))
 async def chosen_sport(callback: CallbackQuery, state: FSMContext):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     sport = callback.data.split(":", 1)[1]
     await state.update_data(sport=sport)
     await state.set_state(OnboardingStates.choosing_tariff)
@@ -330,6 +368,9 @@ async def chosen_sport(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(OnboardingStates.choosing_tariff, F.data.startswith("tariff:"))
 async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     tariff = callback.data.split(":", 1)[1]
     price = PRICE_WITH_MEDAL if tariff == "С медалью" else PRICE_NO_MEDAL
     link = PAYMENT_LINK_WITH_MEDAL if tariff == "С медалью" else PAYMENT_LINK_NO_MEDAL
@@ -411,6 +452,9 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data.startswith("adm_ok:"))
 async def admission_ok(callback: CallbackQuery, bot: Bot):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
@@ -449,6 +493,9 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("adm_no:"))
 async def admission_no(callback: CallbackQuery, bot: Bot):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
@@ -471,6 +518,9 @@ async def admission_no(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("adm_retry:"))
 async def admission_retry(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if _already_processed(callback.id):
+        await callback.answer()
+        return
     await callback.answer("Обрабатываю...")
     try:
         row = int(callback.data.split(":")[1])
@@ -581,6 +631,13 @@ async def catch_address(message: Message, state: FSMContext, bot: Bot):
     if message.text in MENU_BUTTONS:
         return
     row, rec = sheets.find_participant_row(message.from_user.id)
+    log.info(
+        "catch_address: user_id=%s row=%s tariff=%r addr_status=%r text=%r",
+        message.from_user.id, row,
+        rec.get("Тариф") if rec else None,
+        rec.get("Адрес получен?") if rec else None,
+        message.text,
+    )
     if rec and rec.get("Тариф") == "С медалью" and rec.get("Адрес получен?") == "Ожидается":
         sheets.set_participant_field(row, "Адрес получен?", "Да")
         sheets.set_participant_field(row, "Адрес доставки", message.text)
