@@ -371,7 +371,7 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
         sheets.set_participant_status(row, "Ожидает проверки")
         if consent_at:
             sheets.set_participant_field(row, "Согласие с офертой", consent_at)
-            sheets.set_participant_field(row, "Согласие на обработку ПДн", consent_at)
+            sheets.set_participant_field(row, "Согласие на обработку ПДн (дата/время)", consent_at)
     else:
         row = sheets.add_pending_participant(
             telegram_id=message.from_user.id,
@@ -382,7 +382,7 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
             consent_at=consent_at,
         )
         if consent_at:
-            sheets.set_participant_field(row, "Согласие на обработку ПДн", consent_at)
+            sheets.set_participant_field(row, "Согласие на обработку ПДн (дата/время)", consent_at)
         if age_choice == "teen":
             sheets.set_participant_field(row, "Согласие родителя (14-17, да/нет)", "Да")
 
