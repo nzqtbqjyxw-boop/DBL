@@ -7,7 +7,10 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 
 import sheets
 
@@ -25,6 +28,17 @@ router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
 ORGANIZER_USERNAME = "@manchik_luts"
 log = logging.getLogger(__name__)
+
+# Клавиатура участника — та же, что в admission.py (MAIN_KEYBOARD). Продублирована
+# здесь локально, чтобы не создавать циклический импорт между модулями.
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📝 Отправить отчёт")],
+        [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="Правила")],
+        [KeyboardButton(text="🆘 Написать организатору")],
+    ],
+    resize_keyboard=True,
+)
 
 
 class ReportStates(StatesGroup):
@@ -45,6 +59,12 @@ def report_keyboard(report_row: int):
         InlineKeyboardButton(text="⚠️ Подозрение на обман", callback_data=f"rep_susp:{report_row}"),
     ], [
         InlineKeyboardButton(text="✉️ Написать участнику", callback_data=f"rep_msg:{report_row}"),
+    ]])
+
+
+def cancel_msg_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Отмена", callback_data="rep_msg_cancel"),
     ]])
 
 
@@ -268,14 +288,34 @@ async def report_msg_start(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(target_tg_id=tg_id, target_participant_id=participant_id)
     await state.set_state(OrganizerMsgStates.waiting_text)
-    await callback.message.answer(f"Пришли текст для {participant_id} — отправлю от своего имени.")
+    await callback.message.answer(
+        f"Пришли текст для {participant_id} — отправлю от своего имени.",
+        reply_markup=cancel_msg_keyboard(),
+    )
+
+
+@router.callback_query(OrganizerMsgStates.waiting_text, F.data == "rep_msg_cancel")
+async def report_msg_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer("Отменено")
+    await callback.message.edit_text("Отменено, сообщение участнику не отправлено.")
+
+
+@router.message(OrganizerMsgStates.waiting_text, Command("cancel"))
+async def report_msg_cancel_cmd(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Отменено, сообщение участнику не отправлено.")
 
 
 @router.message(OrganizerMsgStates.waiting_text, F.text)
 async def report_msg_send(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     try:
-        await bot.send_message(int(data["target_tg_id"]), message.text)
+        await bot.send_message(
+            int(data["target_tg_id"]),
+            f"✉️ Сообщение от организатора:\n\n{message.text}",
+            reply_markup=MAIN_KEYBOARD,
+        )
         await message.answer("Отправлено.")
     except Exception:
         log.exception("Ошибка отправки личного сообщения участнику")
