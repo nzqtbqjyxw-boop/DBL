@@ -631,14 +631,12 @@ async def catch_address(message: Message, state: FSMContext, bot: Bot):
     if message.text in MENU_BUTTONS:
         return
     row, rec = sheets.find_participant_row(message.from_user.id)
-    log.info(
-        "catch_address: user_id=%s row=%s tariff=%r addr_status=%r text=%r",
-        message.from_user.id, row,
-        rec.get("Тариф") if rec else None,
-        rec.get("Адрес получен?") if rec else None,
-        message.text,
-    )
-    if rec and rec.get("Тариф") == "С медалью" and rec.get("Адрес получен?") == "Ожидается":
+    # Статус "Ожидается" в колонке "Адрес получен?" выставляется только в
+    # admission_ok и только для тарифа "С медалью" — его одного достаточно,
+    # чтобы понять, что мы ждём от человека именно адрес. Доп. проверка
+    # тарифа здесь была лишней и ломалась, если поле "Тариф" в таблице
+    # почему-то оказывалось пустым/не совпадало по формату.
+    if rec and rec.get("Адрес получен?") == "Ожидается":
         sheets.set_participant_field(row, "Адрес получен?", "Да")
         sheets.set_participant_field(row, "Адрес доставки", message.text)
         await message.answer("Адрес сохранён, спасибо!", reply_markup=MAIN_KEYBOARD)
