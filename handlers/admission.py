@@ -1,7 +1,7 @@
 import logging
 import os
 from aiogram import Router, F, Bot
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
@@ -134,7 +134,10 @@ def parent_consent_keyboard(row_index: int):
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
+    source = (command.args or "прямой").strip() or "прямой"
+    await state.update_data(source=source)
+
     row, rec = sheets.find_participant_row(message.from_user.id)
     if rec and rec.get("Статус оплаты") == "Оплачено":
         await message.answer(
@@ -215,12 +218,15 @@ async def chosen_age(callback: CallbackQuery, state: FSMContext):
 
 @router.message(OnboardingStates.waiting_parent_consent_photo, F.photo | F.document)
 async def handle_parent_consent_photo(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    source = data.get("source", "прямой")
     row, rec = sheets.find_participant_row(message.from_user.id)
     if row is None:
         row = sheets.add_pending_participant(
             telegram_id=message.from_user.id,
             username=message.from_user.username or message.from_user.full_name,
             sport="", tariff="", price="",
+            source=source,
         )
         sheets.set_participant_status(row, "Ожидает проверки (согласие родителя)")
 
@@ -406,6 +412,7 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     retry_row = data.get("retry_row")
     consent_at = data.get("docs_accepted_at", "")
     age_choice = data.get("age_choice", "")
+    source = data.get("source", "прямой")
 
     if retry_row:
         row = retry_row
@@ -421,6 +428,7 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
             tariff=tariff,
             price=price,
             consent_at=consent_at,
+            source=source,
         )
         if consent_at:
             sheets.set_participant_field(row, "Согласие на обработку ПДн (дата/время)", consent_at)
@@ -433,6 +441,7 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
         f"Имя: {message.from_user.full_name}\n"
         f"Спорт: {sport}\n"
         f"Тариф: {tariff} — {price}₽\n"
+        f"Источник: {source}\n"
         f"Строка в таблице: {row}\n\n"
         f"{message.caption or ''}"
     )
