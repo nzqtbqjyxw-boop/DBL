@@ -149,10 +149,12 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     referred_by = ""
     source = "прямой"
     if raw_arg.startswith("ref_"):
-        # Реферальная ссылка: /start ref_<ID участника реферера>, где в ID
-        # пробелы и дефисы могли быть съедены Telegram'ом при кодировании —
-        # поэтому реф.код хранится как есть, без попытки восстановить формат.
-        referred_by = raw_arg[len("ref_"):]
+        # Реферальная ссылка: /start ref_<ID участника реферера>.
+        # Telegram разрешает в start-параметре только A-Z a-z 0-9 _ -,
+        # поэтому "ID участника" вида "DBL S01-0042" кодируется в ссылке
+        # как "DBL_S01-0042" (пробел -> подчёркивание), а здесь декодируется
+        # обратно в "DBL S01-0042" для поиска по PARTICIPANTS_HEADERS.
+        referred_by = raw_arg[len("ref_"):].replace("_", " ")
         source = f"реферал от {referred_by}"
     elif raw_arg:
         source = raw_arg
@@ -248,7 +250,6 @@ async def handle_parent_consent_photo(message: Message, state: FSMContext, bot: 
             telegram_id=message.from_user.id,
             username=message.from_user.username or message.from_user.full_name,
             sport="", tariff="", price="",
-            source=source,
         )
         sheets.set_participant_status(row, "Ожидает проверки (согласие родителя)")
 
@@ -726,7 +727,11 @@ async def cmd_profile(message: Message):
     ref_status = rec.get("Реф-статус на след.сезон") or ""
     bot_username = (await message.bot.get_me()).username
     participant_id = rec.get("ID участника", "")
-    ref_link = f"https://t.me/{bot_username}?start=ref_{participant_id}"
+    # Telegram разрешает в start-параметре только A-Z a-z 0-9 _ -, поэтому
+    # кодируем пробел в ID участника ("DBL S01-0042") как подчёркивание —
+    # обратное декодирование см. в cmd_start.
+    ref_code = participant_id.replace(" ", "_")
+    ref_link = f"https://t.me/{bot_username}?start=ref_{ref_code}"
     text += (
         f"\n🔗 <b>Твоя реферальная ссылка:</b>\n{ref_link}\n"
         f"Приглашено оплативших друзей: {invited}\n"
