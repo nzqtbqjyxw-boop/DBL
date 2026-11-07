@@ -50,6 +50,14 @@ class OrganizerMsgStates(StatesGroup):
     waiting_text = State()
 
 
+class OrganizerReviewStates(StatesGroup):
+    """Состояния организатора при нажатии «Засчитать»: сначала просим
+    подтверждённую дистанцию (которую он видит на скриншоте), затем время
+    тренировки, и только потом фиксируем решение."""
+    waiting_confirm_km = State()
+    waiting_confirm_time = State()
+
+
 def report_keyboard(report_row: int):
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Засчитать", callback_data=f"rep_ok:{report_row}"),
@@ -65,6 +73,12 @@ def report_keyboard(report_row: int):
 def cancel_msg_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="❌ Отмена", callback_data="rep_msg_cancel"),
+    ]])
+
+
+def skip_time_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⏭ Пропустить (время неизвестно)", callback_data="rep_time_skip"),
     ]])
 
 
@@ -150,7 +164,7 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot):
             f"Дата: {today}\n"
             f"Время отправки: {sent_at}\n"
             f"Попытка: {attempt}\n"
-            f"Км: {km_display}\n"
+            f"Км (заявлено участником): {km_display}\n"
             f"Строка: {row}"
         ),
         reply_markup=report_keyboard(row),
@@ -198,7 +212,7 @@ async def cmd_pending(message: Message, bot: Bot):
                 f"Участник: {rec.get('ID участника')}\n"
                 f"Дата: {rec.get('Дата тренировки')}\n"
                 f"Время отправки: {rec.get('Время отправки')}\n"
-                f"Км: {rec.get('Км') or '—'}\n"
+                f"Км (заявлено участником): {rec.get('Км') or '—'}\n"
                 f"Строка: {row_idx}"
             ),
             reply_markup=report_keyboard(row_idx),
@@ -206,24 +220,76 @@ async def cmd_pending(message: Message, bot: Bot):
 
 
 @router.callback_query(F.data.startswith("rep_ok:"))
-async def report_ok(callback: CallbackQuery, bot: Bot):
-    await callback.answer("Обрабатываю...")
+async def report_ok_start(callback: CallbackQuery, state: FSMContext):
+    """Первый шаг «Засчитать»: прежде чем зафиксировать решение, просим
+    организатора ввести подтверждённую дистанцию, которую он видит на скриншоте."""
+    await callback.answer()
+    row = int(callback.data.split(":")[1])
+    await state.update_data(review_row=row, review_message=callback.message)
+    await state.set_state(OrganizerReviewStates.waiting_confirm_km)
+    await callback.message.answer(
+        "Сколько км видно на скриншоте? Пришли число (например 3.2)."
+    )
+
+
+@router.message(OrganizerReviewStates.waiting_confirm_km, F.text)
+async def report_ok_got_km(message: Message, state: FSMContext):
     try:
-        row = int(callback.data.split(":")[1])
+        km = float(message.text.replace(",", "."))
+    except ValueError:
+        await message.answer("Нужно число, например 3.2. Попробуй ещё раз.")
+        return
+    await state.update_data(confirmed_km=km)
+    await state.set_state(OrganizerReviewStates.waiting_confirm_time)
+    await message.answer(
+        "Сколько длилась тренировка (время)? Например 00:25:30, или нажми «Пропустить».",
+        reply_markup=skip_time_keyboard(),
+    )
+
+
+@router.message(OrganizerReviewStates.waiting_confirm_time, F.text)
+async def report_ok_got_time(message: Message, state: FSMContext, bot: Bot):
+    await _finish_report_ok(message.answer, state, bot, training_time=message.text.strip())
+
+
+@router.callback_query(OrganizerReviewStates.waiting_confirm_time, F.data == "rep_time_skip")
+async def report_ok_skip_time(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    await _finish_report_ok(callback.message.answer, state, bot, training_time="")
+
+
+async def _finish_report_ok(answer_fn, state: FSMContext, bot: Bot, training_time: str):
+    data = await state.get_data()
+    row = data["review_row"]
+    confirmed_km = data.get("confirmed_km")
+    review_message = data.get("review_message")
+
+    try:
         values = sheets.find_report_row(row)
         participant_id = values[0]
         lives_before = int(values[8]) if len(values) > 8 and values[8] else 3
         lives_after = lives_before
 
-        sheets.update_report_decision(row, "Засчитано", lives_after)
+        sheets.update_report_decision(
+            row, "Засчитано", lives_after,
+            confirmed_km=confirmed_km, training_time=training_time,
+        )
 
         tg_id = _get_participant_telegram_id(participant_id)
         if tg_id:
             await bot.send_message(int(tg_id), "✅ Твой отчёт засчитан!")
-        await _safe_edit_caption(callback.message, callback.message.caption + "\n\n✅ ЗАСЧИТАНО")
+        if review_message:
+            await _safe_edit_caption(
+                review_message,
+                review_message.caption
+                + f"\n\n✅ ЗАСЧИТАНО (км: {confirmed_km}, время: {training_time or '—'})",
+            )
+        await answer_fn("Готово — отчёт засчитан.")
     except Exception:
-        log.exception("Ошибка в report_ok")
-        await callback.message.answer("⚠️ Ошибка при обработке: см. логи Railway")
+        log.exception("Ошибка в _finish_report_ok")
+        await answer_fn("⚠️ Ошибка при обработке: см. логи Railway")
+    finally:
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("rep_no:"))
