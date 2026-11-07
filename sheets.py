@@ -154,7 +154,7 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
         if address:
             values["Адрес доставки"] = address
         if consent_at:
-            values["Согласие с офертой"] = consent_at
+            values["Согласие с офертой (дата/время)"] = consent_at
         if pdn_consent_at:
             values["Согласие на обработку ПДн (дата/время)"] = pdn_consent_at
         if is_minor:
