@@ -225,7 +225,14 @@ async def report_ok_start(callback: CallbackQuery, state: FSMContext):
     организатора ввести подтверждённую дистанцию, которую он видит на скриншоте."""
     await callback.answer()
     row = int(callback.data.split(":")[1])
-    await state.update_data(review_row=row, review_message=callback.message)
+    # В FSM-хранилище можно сохранять только простые JSON-сериализуемые
+    # значения — объект Message (callback.message) туда не кладём, вместо
+    # этого запоминаем chat_id и message_id и позже получаем сообщение заново.
+    await state.update_data(
+        review_row=row,
+        review_chat_id=callback.message.chat.id,
+        review_message_id=callback.message.message_id,
+    )
     await state.set_state(OrganizerReviewStates.waiting_confirm_km)
     await callback.message.answer(
         "Сколько км видно на скриншоте? Пришли число (например 3.2)."
@@ -262,7 +269,8 @@ async def _finish_report_ok(answer_fn, state: FSMContext, bot: Bot, training_tim
     data = await state.get_data()
     row = data["review_row"]
     confirmed_km = data.get("confirmed_km")
-    review_message = data.get("review_message")
+    review_chat_id = data.get("review_chat_id")
+    review_message_id = data.get("review_message_id")
 
     try:
         values = sheets.find_report_row(row)
@@ -278,11 +286,11 @@ async def _finish_report_ok(answer_fn, state: FSMContext, bot: Bot, training_tim
         tg_id = _get_participant_telegram_id(participant_id)
         if tg_id:
             await bot.send_message(int(tg_id), "✅ Твой отчёт засчитан!")
-        if review_message:
-            await _safe_edit_caption(
-                review_message,
-                review_message.caption
-                + f"\n\n✅ ЗАСЧИТАНО (км: {confirmed_km}, время: {training_time or '—'})",
+        if review_chat_id and review_message_id:
+            await bot.send_message(
+                review_chat_id,
+                f"✅ ЗАСЧИТАНО (строка {row}): км: {confirmed_km}, время: {training_time or '—'}",
+                reply_to_message_id=review_message_id,
             )
         await answer_fn("Готово — отчёт засчитан.")
     except Exception:
