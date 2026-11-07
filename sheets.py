@@ -99,15 +99,25 @@ def set_participant_field(row_index: int, field: str, value):
 
 def find_participant_row(telegram_id: str):
     """Возвращает (row_index, record) по Telegram ID, либо (None, None).
-    Поле хранится как "<id> (<имя>)", поэтому сравниваем только часть до пробела."""
+    Поле хранится как "<id> (<имя>)", поэтому сравниваем только часть до пробела.
+    Если у одного Telegram ID оказалось НЕСКОЛЬКО строк (например, человек
+    сначала начал регистрацию, она не завершилась, и позже создалась вторая
+    строка) — возвращаем ПОСЛЕДНЮЮ (самую свежую), а из найденных строк
+    приоритет отдаём той, где "Статус оплаты" == "Оплачено", если такая есть."""
     records = participants_ws.get_all_records()
     target = str(telegram_id).strip()
+    matches = []
     for i, rec in enumerate(records, start=2):  # строка 1 — заголовок
         field = str(rec.get("Telegram/контакт", "")).strip()
         field_id = field.split(" ")[0] if field else ""
         if field_id == target:
+            matches.append((i, rec))
+    if not matches:
+        return None, None
+    for i, rec in matches:
+        if rec.get("Статус оплаты") == "Оплачено":
             return i, rec
-    return None, None
+    return matches[-1]
 
 
 def find_participant_by_id(participant_id: str):
