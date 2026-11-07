@@ -10,7 +10,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
 )
 import sheets
-from handlers.reports import ReportStates, OrganizerMsgStates, _safe_edit_caption
+from handlers.reports import ReportStates, OrganizerMsgStates, OrganizerReviewStates, _safe_edit_caption
 router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
 ORGANIZER_USERNAME = "@manchik_luts"
@@ -507,6 +507,8 @@ async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
         ReportStates.waiting_photo.state,
         ReportStates.waiting_km.state,
         OrganizerMsgStates.waiting_text.state,
+        OrganizerReviewStates.waiting_confirm_km.state,
+        OrganizerReviewStates.waiting_confirm_time.state,
     )
 
 
