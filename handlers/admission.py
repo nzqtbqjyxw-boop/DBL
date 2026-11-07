@@ -67,7 +67,7 @@ class AddressStates(StatesGroup):
     waiting_address = State()
 
 
-INSTRUCTION_LINK = "https://quietly-divine-jay.tilda.ws/#section-instruction"
+INSTRUCTION_LINK = "https://dbldobetterlife.tilda.ws"
 TRACKER_APPS_TEXT = (
     "📱 <b>Установи приложение-трекер</b>, чтобы снимать скрин тренировки "
     "с маршрутом, датой, временем и км. Подойдёт любое:\n"
@@ -175,7 +175,8 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         "У тебя есть 3 жизни. Сохрани хотя бы одну до конца сезона — получишь медаль DBL.\n\n"
         f"{TRACKER_APPS_TEXT}\n"
         f"📖 <b>Полная пошаговая инструкция</b> — как зарегистрироваться, оплатить "
-        f"и отправлять отчёты каждый день:\n{INSTRUCTION_LINK}\n\n"
+        f"и отправлять отчёты каждый день — в самом низу нашего официального сайта:\n"
+        f"{INSTRUCTION_LINK}\n\n"
         f"Канал проекта с новостями: {CHANNEL_LINK}",
         parse_mode="HTML",
         reply_markup=PAYMENT_KEYBOARD,
@@ -411,7 +412,8 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
             "реальных участников от спама)."
         )
         await callback.message.answer(
-            "Нажми кнопку ниже, чтобы поделиться номером:",
+            "Нажми кнопку ниже, чтобы поделиться номером, либо просто введи номер "
+            "телефона текстом (например +79001234567):",
             reply_markup=PHONE_KEYBOARD,
         )
         return
@@ -432,7 +434,26 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(OnboardingStates.waiting_free_phone, F.contact)
-async def handle_free_phone(message: Message, state: FSMContext, bot: Bot):
+async def handle_free_phone_contact(message: Message, state: FSMContext, bot: Bot):
+    await _register_free_participant(message, state, bot, phone=message.contact.phone_number)
+
+
+@router.message(OnboardingStates.waiting_free_phone, F.text)
+async def handle_free_phone_text(message: Message, state: FSMContext, bot: Bot):
+    phone_raw = message.text.strip()
+    digits = "".join(ch for ch in phone_raw if ch.isdigit())
+    # Простая проверка: похоже ли введённое на номер телефона (10-15 цифр).
+    if not (10 <= len(digits) <= 15):
+        await message.answer(
+            "Это не похоже на номер телефона. Введи номер текстом "
+            "(например +79001234567) или нажми кнопку «Поделиться номером».",
+            reply_markup=PHONE_KEYBOARD,
+        )
+        return
+    await _register_free_participant(message, state, bot, phone=phone_raw)
+
+
+async def _register_free_participant(message: Message, state: FSMContext, bot: Bot, phone: str):
     data = await state.get_data()
     sport = data.get("sport", "")
     tariff = data.get("tariff", "")
@@ -440,7 +461,6 @@ async def handle_free_phone(message: Message, state: FSMContext, bot: Bot):
     age_choice = data.get("age_choice", "")
     source = data.get("source", "прямой")
     referred_by = data.get("referred_by", "")
-    phone = message.contact.phone_number
 
     row = sheets.add_pending_participant(
         telegram_id=message.from_user.id,
