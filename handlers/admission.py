@@ -15,10 +15,13 @@ router = Router()
 ORGANIZER_CHAT_ID = int(os.environ["ORGANIZER_CHAT_ID"])
 ORGANIZER_USERNAME = "@manchik_luts"
 log = logging.getLogger(__name__)
-PRICE_NO_MEDAL = 500
-PRICE_WITH_MEDAL = 1490
-PAYMENT_LINK_NO_MEDAL = "https://yookassa.ru/my/i/atKmjoB8TKJB/l"
-PAYMENT_LINK_WITH_MEDAL = "https://yookassa.ru/my/i/auhWxZqv8jGa/l"
+
+PRICE_NO_MEDAL = 0
+PRICE_WITH_MEDAL = 1390
+PRICE_WITH_MEDAL_OLD = 1490  # для отображения зачёркнутой старой цены
+PRICE_WITH_MEDAL_REFERRAL = 1100  # цена для реферера со статусом "Скидка 1100₽"
+
+PAYMENT_LINK_WITH_MEDAL = "https://yookassa.ru/my/i/au5A5aeec8yn/l"
 CHANNEL_LINK = "https://t.me/DBL_Better_life"
 GROUP_LINK = "https://t.me/+sK53VEAlDwo3YzVi"
 
@@ -57,6 +60,7 @@ class OnboardingStates(StatesGroup):
     choosing_sport = State()
     choosing_tariff = State()
     waiting_payment_proof = State()
+    waiting_free_phone = State()
 
 
 class AddressStates(StatesGroup):
@@ -88,6 +92,12 @@ PAYMENT_KEYBOARD = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
+PHONE_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📱 Поделиться номером", request_contact=True)],
+    ],
+    resize_keyboard=True,
+)
 
 
 def age_keyboard():
@@ -113,7 +123,7 @@ def sport_keyboard():
 
 def tariff_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Без медали — {PRICE_NO_MEDAL}₽", callback_data="tariff:Без медали")],
+        [InlineKeyboardButton(text="🆓 Без медали — бесплатно", callback_data="tariff:Без медали")],
         [InlineKeyboardButton(text=f"С медалью — {PRICE_WITH_MEDAL}₽", callback_data="tariff:С медалью")],
     ])
 
@@ -135,8 +145,18 @@ def parent_consent_keyboard(row_index: int):
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
-    source = (command.args or "прямой").strip() or "прямой"
-    await state.update_data(source=source)
+    raw_arg = (command.args or "").strip()
+    referred_by = ""
+    source = "прямой"
+    if raw_arg.startswith("ref_"):
+        # Реферальная ссылка: /start ref_<ID участника реферера>, где в ID
+        # пробелы и дефисы могли быть съедены Telegram'ом при кодировании —
+        # поэтому реф.код хранится как есть, без попытки восстановить формат.
+        referred_by = raw_arg[len("ref_"):]
+        source = f"реферал от {referred_by}"
+    elif raw_arg:
+        source = raw_arg
+    await state.update_data(source=source, referred_by=referred_by)
 
     row, rec = sheets.find_participant_row(message.from_user.id)
     if rec and rec.get("Статус оплаты") == "Оплачено":
@@ -161,7 +181,8 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         reply_markup=PAYMENT_KEYBOARD,
     )
     await message.answer(
-        "Когда будешь готов — нажми «💳 Подтвердить оплату», чтобы выбрать вид спорта, тариф и оплатить участие."
+        "Когда будешь готов — нажми «💳 Подтвердить оплату», чтобы выбрать вид спорта и тариф "
+        "(тариф «Без медали» — бесплатный, «С медалью» — платный)."
     )
 
 
@@ -170,7 +191,7 @@ async def start_payment_flow(message: Message, state: FSMContext):
     row, rec = sheets.find_participant_row(message.from_user.id)
     if rec and rec.get("Статус оплаты") == "Оплачено":
         await message.answer(
-            f"Ты уже оплатил участие. Твой номер: {rec.get('ID участника')}.",
+            f"Ты уже допущен к сезону. Твой номер: {rec.get('ID участника')}.",
             reply_markup=MAIN_KEYBOARD,
         )
         return
@@ -316,7 +337,7 @@ async def parent_consent_retry(callback: CallbackQuery, bot: Bot, state: FSMCont
 
 async def _send_documents(message: Message):
     await message.answer(
-        "Перед оплатой ознакомься с документами:\n\n"
+        "Перед продолжением ознакомься с документами:\n\n"
         f"📄 Публичная оферта: {OFFER_LINK}\n"
         f"🔒 Политика обработки персональных данных: {PRIVACY_POLICY_LINK}\n"
         f"✅ Согласие на обработку персональных данных: {PD_CONSENT_LINK}",
@@ -327,7 +348,7 @@ async def _send_documents(message: Message):
 async def _send_documents_by_bot(bot: Bot, telegram_id: int):
     await bot.send_message(
         telegram_id,
-        "Перед оплатой ознакомься с документами:\n\n"
+        "Перед продолжением ознакомься с документами:\n\n"
         f"📄 Публичная оферта: {OFFER_LINK}\n"
         f"🔒 Политика обработки персональных данных: {PRIVACY_POLICY_LINK}\n"
         f"✅ Согласие на обработку персональных данных: {PD_CONSENT_LINK}",
@@ -378,20 +399,85 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     tariff = callback.data.split(":", 1)[1]
-    price = PRICE_WITH_MEDAL if tariff == "С медалью" else PRICE_NO_MEDAL
-    link = PAYMENT_LINK_WITH_MEDAL if tariff == "С медалью" else PAYMENT_LINK_NO_MEDAL
-    await state.update_data(tariff=tariff, price=price)
+    await state.update_data(tariff=tariff)
+    await callback.answer()
+
+    if tariff == "Без медали":
+        # Бесплатный тариф: платить нечего, но просим телефон для борьбы со спамом
+        await state.set_state(OnboardingStates.waiting_free_phone)
+        await callback.message.edit_text(
+            f"Тариф: {tariff} — бесплатно 🆓\n\n"
+            "Последний шаг — поделись номером телефона (нужно, чтобы отличать "
+            "реальных участников от спама)."
+        )
+        await callback.message.answer(
+            "Нажми кнопку ниже, чтобы поделиться номером:",
+            reply_markup=PHONE_KEYBOARD,
+        )
+        return
+
+    await state.update_data(price=PRICE_WITH_MEDAL)
     await state.set_state(OnboardingStates.waiting_payment_proof)
     pay_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить {price}₽", url=link)],
+        [InlineKeyboardButton(text=f"💳 Оплатить {PRICE_WITH_MEDAL}₽", url=PAYMENT_LINK_WITH_MEDAL)],
     ])
     await callback.message.edit_text(
-        f"Тариф: {tariff} — {price}₽\n\n"
+        f"Тариф: {tariff}\n"
+        f"Цена: <s>{PRICE_WITH_MEDAL_OLD}₽</s> {PRICE_WITH_MEDAL}₽\n\n"
         f"Нажми кнопку ниже, чтобы оплатить. После оплаты пришли сюда чек/скриншот "
         f"и укажи ФИО, которое использовал при оплате.",
+        parse_mode="HTML",
         reply_markup=pay_kb,
     )
-    await callback.answer()
+
+
+@router.message(OnboardingStates.waiting_free_phone, F.contact)
+async def handle_free_phone(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    sport = data.get("sport", "")
+    tariff = data.get("tariff", "")
+    consent_at = data.get("docs_accepted_at", "")
+    age_choice = data.get("age_choice", "")
+    source = data.get("source", "прямой")
+    referred_by = data.get("referred_by", "")
+    phone = message.contact.phone_number
+
+    row = sheets.add_pending_participant(
+        telegram_id=message.from_user.id,
+        username=message.from_user.username or message.from_user.full_name,
+        sport=sport,
+        tariff=tariff,
+        price=PRICE_NO_MEDAL,
+        consent_at=consent_at,
+        referred_by=referred_by,
+        phone=phone,
+    )
+    if consent_at:
+        sheets.set_participant_field(row, "Согласие на обработку ПДн (дата/время)", consent_at)
+    if age_choice == "teen":
+        sheets.set_participant_field(row, "Согласие родителя (14-17, да/нет)", "Да")
+
+    season = "S01"
+    participant_id = f"DBL {season}-{str(row).zfill(4)}"
+    sheets.set_participant_status(row, "Оплачено", participant_id)
+
+    await message.answer(
+        f"✅ Готово! Твой номер участника: {participant_id}.\n\n"
+        f"Присоединяйся к чату участников — там мы делимся результатами и поддерживаем друг друга:\n{GROUP_LINK}",
+        reply_markup=MAIN_KEYBOARD,
+    )
+    await bot.send_message(
+        ORGANIZER_CHAT_ID,
+        f"🆓 Новый бесплатный участник\n"
+        f"Telegram: @{message.from_user.username or '—'} ({message.from_user.id})\n"
+        f"Имя: {message.from_user.full_name}\n"
+        f"Телефон: {phone}\n"
+        f"Спорт: {sport}\n"
+        f"Источник: {source}\n"
+        f"Номер: {participant_id}\n"
+        f"Строка: {row}",
+    )
+    await state.clear()
 
 
 async def _not_in_report_flow(message: Message, state: FSMContext) -> bool:
@@ -413,12 +499,13 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     consent_at = data.get("docs_accepted_at", "")
     age_choice = data.get("age_choice", "")
     source = data.get("source", "прямой")
+    referred_by = data.get("referred_by", "")
 
     if retry_row:
         row = retry_row
         sheets.set_participant_status(row, "Ожидает проверки")
         if consent_at:
-            sheets.set_participant_field(row, "Согласие с офертой", consent_at)
+            sheets.set_participant_field(row, "Согласие с офертой (дата/время)", consent_at)
             sheets.set_participant_field(row, "Согласие на обработку ПДн (дата/время)", consent_at)
     else:
         row = sheets.add_pending_participant(
@@ -428,7 +515,7 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
             tariff=tariff,
             price=price,
             consent_at=consent_at,
-            source=source,
+            referred_by=referred_by,
         )
         if consent_at:
             sheets.set_participant_field(row, "Согласие на обработку ПДн (дата/время)", consent_at)
@@ -477,6 +564,7 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
         telegram_id = telegram_field.split(" ")[0]
         tariff = _col("Тариф")
         season = _col("Сезон", "S01")
+        referred_by = _col("Пригласил (чей реф.код)")
         participant_id = f"DBL {season}-{str(row).zfill(4)}"
         sheets.set_participant_status(row, "Оплачено", participant_id)
         await bot.send_message(
@@ -492,6 +580,35 @@ async def admission_ok(callback: CallbackQuery, bot: Bot):
                 "(город, улица, дом, квартира, индекс, получатель).",
             )
             sheets.set_participant_field(row, "Адрес получен?", "Ожидается")
+
+            # Реферальная программа: засчитываем приглашение, только если
+            # оплативший друг сам выбрал платный тариф "С медалью".
+            if referred_by:
+                ref_row, new_count, new_status = sheets.increment_referral_count(referred_by)
+                if ref_row is not None:
+                    ref_rec = sheets.participants_ws.row_values(ref_row)
+                    idx = sheets.PARTICIPANTS_HEADERS.index("Telegram/контакт")
+                    ref_telegram_field = ref_rec[idx] if len(ref_rec) > idx else ""
+                    ref_telegram_id = ref_telegram_field.split(" ")[0]
+                    if ref_telegram_id.strip().lstrip("-").isdigit():
+                        status_text = (
+                            f"🎉 Твой друг оплатил участие по твоей ссылке!\n"
+                            f"Оплативших друзей: {new_count}.\n"
+                        )
+                        if new_status:
+                            status_text += (
+                                f"Твой статус на следующий сезон: <b>{new_status}</b> "
+                                f"(действует для тарифа «С медалью»)."
+                            )
+                        else:
+                            status_text += "Пригласи ещё друзей, чтобы получить скидку на следующий сезон."
+                        await bot.send_message(int(ref_telegram_id), status_text, parse_mode="HTML")
+                    await bot.send_message(
+                        ORGANIZER_CHAT_ID,
+                        f"🔗 Реф. программа: {referred_by} пригласил друга ({participant_id}). "
+                        f"Всего оплативших друзей: {new_count}. Статус: {new_status or '—'}",
+                    )
+
         await _safe_edit_caption(
             callback.message, callback.message.caption + f"\n\n✅ ПОДТВЕРЖДЕНО: {participant_id}"
         )
@@ -584,6 +701,21 @@ async def cmd_profile(message: Message):
     if rec.get("Тариф") == "С медалью":
         addr_status = rec.get("Адрес получен?", "Нет")
         text += f"Адрес доставки: {addr_status}\n"
+
+    invited = rec.get("Приглашено друзей (оплативших)") or 0
+    ref_status = rec.get("Реф-статус на след.сезон") or ""
+    bot_username = (await message.bot.get_me()).username
+    participant_id = rec.get("ID участника", "")
+    ref_link = f"https://t.me/{bot_username}?start=ref_{participant_id}"
+    text += (
+        f"\n🔗 <b>Твоя реферальная ссылка:</b>\n{ref_link}\n"
+        f"Приглашено оплативших друзей: {invited}\n"
+    )
+    if ref_status:
+        text += f"Твой статус на след. сезон: <b>{ref_status}</b>\n"
+    else:
+        text += "Пригласи друга, который оплатит тариф «С медалью» — получишь скидку на след. сезон.\n"
+
     await message.answer(text, parse_mode="HTML")
 
 
