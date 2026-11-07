@@ -28,14 +28,17 @@ PARTICIPANTS_HEADERS = [
     "ID участника", "Telegram/контакт", "Email", "Сезон", "Спорт", "Тариф",
     "Сумма оплаты, ₽", "Статус оплаты", "Дата оплаты", "Право на медаль",
     "Адрес получен?", "Дата отправки", "Трек-номер", "Примечания",
-    "Адрес доставки", "Согласие с офертой",
+    "Адрес доставки", "Согласие с офертой (дата/время)",
     "Согласие на обработку ПДн (дата/время)", "Согласие родителя (14-17, да/нет)",
+    "Пригласил (чей реф.код)", "Приглашено друзей (оплативших)",
+    "Реф-статус на след.сезон", "Телефон",
 ]
 
 REPORTS_HEADERS = [
     "ID участника", "Сезон", "День", "Дата тренировки", "Вид спорта",
     "Км", "Скриншот (file_id)", "Статус", "Жизни до", "Жизни после",
     "Комментарий организатора", "Дата решения", "Время отправки", "Попытка №",
+    "Км (подтверждено)", "Время тренировки",
 ]
 
 PENDING_STATUSES = ("На проверке",)
@@ -45,8 +48,19 @@ MAX_ATTEMPTS_PER_DAY = 3
 SEASON_START_DATE = datetime.strptime("2026-11-14", "%Y-%m-%d")
 
 # Последняя колонка листа "Участники" в A1-нотации (должна соответствовать
-# длине PARTICIPANTS_HEADERS). Сейчас 18 колонок -> R.
-PARTICIPANTS_LAST_COL = "R"
+# длине PARTICIPANTS_HEADERS). Сейчас 22 колонки -> V.
+PARTICIPANTS_LAST_COL = "V"
+
+# Последняя колонка листа "Отчёты" в A1-нотации.
+# Сейчас 16 колонок -> P.
+REPORTS_LAST_COL = "P"
+
+# Пороги реферальной программы: сколько оплативших друзей нужно пригласить,
+# чтобы получить соответствующий статус на СЛЕДУЮЩИЙ сезон.
+REFERRAL_TIERS = [
+    (4, "Бесплатно"),
+    (1, "Скидка 1100₽"),
+]
 
 
 def now_str():
@@ -96,13 +110,25 @@ def find_participant_row(telegram_id: str):
     return None, None
 
 
+def find_participant_by_id(participant_id: str):
+    """Возвращает (row_index, record) по "ID участника" (DBL S01-0042), либо (None, None)."""
+    records = participants_ws.get_all_records()
+    target = str(participant_id).strip()
+    for i, rec in enumerate(records, start=2):
+        if str(rec.get("ID участника", "")).strip() == target:
+            return i, rec
+    return None, None
+
+
 def add_pending_participant(telegram_id: str, username: str, sport: str, tariff: str, price: int,
                              season: str = "S01", address: str = "", consent_at: str = "",
-                             pdn_consent_at: str = "", is_minor: bool = False):
+                             pdn_consent_at: str = "", is_minor: bool = False,
+                             referred_by: str = "", phone: str = ""):
     """
     Заполняет первую пустую заготовку (Telegram/контакт пуст, Сезон совпадает)
     или, если заготовок не осталось, добавляет новую строку в конец.
-    Записывает также спорт/тариф/сумму/адрес/согласие с офертой/согласие на ПДн.
+    Записывает также спорт/тариф/сумму/адрес/согласие с офертой/согласие на ПДн/
+    кто пригласил/телефон.
     Если участник несовершеннолетний (14-17), колонка "Согласие родителя" ставится
     в "Ожидается" — пустая строка означает "вопрос ещё не возникал" (18+).
     Возвращает номер строки.
@@ -133,6 +159,10 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
             values["Согласие на обработку ПДн (дата/время)"] = pdn_consent_at
         if is_minor:
             values["Согласие родителя (14-17, да/нет)"] = "Ожидается"
+        if referred_by:
+            values["Пригласил (чей реф.код)"] = referred_by
+        if phone:
+            values["Телефон"] = phone
 
         if row_index is not None:
             for col_name, value in values.items():
@@ -144,6 +174,7 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
             "Ожидает проверки", "", "Не определено", "Нет", "", "", "",
             address, consent_at, pdn_consent_at,
             "Ожидается" if is_minor else "",
+            referred_by, "", "", phone,
         ]
         last_used = len(records) + 1  # +1 за заголовок
         row_index = last_used + 1
@@ -189,6 +220,34 @@ def get_lives(participant_id: str) -> int:
     return max(lives, 0)
 
 
+def referral_tier_for_count(count: int) -> str:
+    """Возвращает текст реф-статуса для данного числа оплативших друзей,
+    либо "" если порог ещё не достигнут."""
+    for threshold, label in REFERRAL_TIERS:
+        if count >= threshold:
+            return label
+    return ""
+
+
+def increment_referral_count(referrer_participant_id: str):
+    """Находит реферера по его "ID участника", увеличивает счётчик
+    "Приглашено друзей (оплативших)" на 1 и пересчитывает реф-статус
+    на следующий сезон. Возвращает (row_index, новый_счётчик, новый_статус)
+    либо (None, None, None), если реферер не найден."""
+    row, rec = find_participant_by_id(referrer_participant_id)
+    if row is None:
+        return None, None, None
+    try:
+        current = int(rec.get("Приглашено друзей (оплативших)") or 0)
+    except ValueError:
+        current = 0
+    new_count = current + 1
+    new_status = referral_tier_for_count(new_count)
+    set_participant_field(row, "Приглашено друзей (оплативших)", new_count)
+    set_participant_field(row, "Реф-статус на след.сезон", new_status)
+    return row, new_count, new_status
+
+
 # ---------- Отчёты ----------
 
 def get_today_report_status(participant_id: str, training_date: str):
@@ -222,11 +281,12 @@ def add_report(participant_id, season, day, training_date, sport, km, file_id):
     row = [
         participant_id, season, day, training_date, sport, km, file_id,
         "На проверке", lives_before, "", "", "", sent_at, attempt_number,
+        "", "",
     ]
     with _write_lock:
         col_a = reports_ws.col_values(1)  # ID участника — последняя реально заполненная строка
         row_index = len(col_a) + 1
-        reports_ws.update(f"A{row_index}:N{row_index}", [row], value_input_option="USER_ENTERED")
+        reports_ws.update(f"A{row_index}:{REPORTS_LAST_COL}{row_index}", [row], value_input_option="USER_ENTERED")
         return row_index, sent_at, attempt_number
 
 
@@ -249,13 +309,18 @@ def update_report_photo_and_status(row_index: int, file_id: str, status: str):
     return sent_at, attempt
 
 
-def update_report_decision(row_index: int, status: str, lives_after: int, comment: str = ""):
+def update_report_decision(row_index: int, status: str, lives_after: int, comment: str = "",
+                            confirmed_km=None, training_time: str = ""):
     updates = {
         "Статус": status,
         "Жизни после": lives_after,
         "Комментарий организатора": comment,
         "Дата решения": now_str(),
     }
+    if confirmed_km is not None:
+        updates["Км (подтверждено)"] = confirmed_km
+    if training_time:
+        updates["Время тренировки"] = training_time
     for col_name, value in updates.items():
         col = REPORTS_HEADERS.index(col_name) + 1
         reports_ws.update_cell(row_index, col, value)
