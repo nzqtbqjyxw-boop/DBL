@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import threading
@@ -12,7 +13,16 @@ SCOPES = [
 ]
 
 SHEET_ID = os.environ["SHEET_ID"]
-creds_dict = json.loads(os.environ["GOOGLE_CREDS_JSON"])
+_creds_raw = os.environ["GOOGLE_CREDS_JSON"]
+try:
+    # Значение хранится в base64 (так требует Amvera: сырой JSON с кавычками
+    # не проходит валидацию переменных окружения)
+    _creds_json_str = base64.b64decode(_creds_raw).decode("utf-8")
+    creds_dict = json.loads(_creds_json_str)
+except Exception:
+    # На случай, если где-то (например, локально) переменная задана как
+    # обычный JSON без base64 — пробуем распарсить напрямую
+    creds_dict = json.loads(_creds_raw)
 creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 gc = gspread.authorize(creds)
 sh = gc.open_by_key(SHEET_ID)
