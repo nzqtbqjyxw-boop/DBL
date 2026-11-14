@@ -879,13 +879,22 @@ class VKBot:
 
 def run_vk_bot_blocking():
     """Синхронная точка входа — запускается в отдельном потоке/процессе,
-    т.к. vk_api.longpoll блокирующий (не asyncio)."""
-    bot = VKBot()
-    bot.run()
+    т.к. vk_api.longpoll блокирующий (не asyncio).
+    Любое исключение (неверный токен, неверный group_id, сетевая ошибка при
+    первом запросе к Long Poll серверу) логируется явно — без этого
+    исключение в отдельном потоке теряется молча."""
+    log.info("VK bot: инициализация (group_id=%s)", VK_GROUP_ID)
+    try:
+        bot = VKBot()
+        log.info("VK bot: VkApi и VkBotLongPoll созданы успешно, начинаю слушать события")
+        bot.run()
+    except Exception:
+        log.exception("VK bot: КРИТИЧЕСКАЯ ОШИБКА — бот остановлен")
 
 
 async def run_vk_bot_async():
     """Асинхронная обёртка для запуска вместе с aiogram через asyncio.gather:
     блокирующий Long Poll уводим в отдельный поток, чтобы не стопорить
     событийный цикл Telegram-бота."""
+    log.info("VK bot: запуск фоновой задачи run_vk_bot_async")
     await asyncio.to_thread(run_vk_bot_blocking)
