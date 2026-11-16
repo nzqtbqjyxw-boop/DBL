@@ -130,6 +130,24 @@ def find_participant_row(telegram_id: str):
     return matches[-1]
 
 
+def find_participant_by_platform_id(platform_id, platform: str = "telegram"):
+    """Универсальный поиск участника по ID платформы (Telegram / VK).
+
+    На текущий момент оба бота (Telegram и VK) хранят ID в общем поле
+    "Telegram/контакт" в формате "<id> (<имя>)" (см. add_pending_participant),
+    поэтому логика поиска одинаковая — делегируем в find_participant_row.
+
+    ВАЖНО: потенциальная коллизия. Если Telegram-пользователь и VK-пользователь
+    имеют одинаковый числовой ID, они «склеятся». Если это станет проблемой —
+    нужно хранить префикс платформы (например, "tg:123" / "vk:123"),
+    но это потребует миграции существующих строк.
+
+    Параметр platform оставлен для совместимости с сигнатурой вызова
+    в vk_bot.py и на будущее.
+    """
+    return find_participant_row(platform_id)
+
+
 def find_participant_by_id(participant_id: str):
     """Возвращает (row_index, record) по "ID участника" (DBL S01-0042), либо (None, None)."""
     records = participants_ws.get_all_records()
