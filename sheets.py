@@ -223,6 +223,48 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
         return row_index
 
 
+def add_pending_participant_vk(*args, **kwargs):
+    """
+    VK-обёртка над add_pending_participant.
+
+    Вызывается из handle_parent_consent_photo — то есть участник
+    несовершеннолетний (14-17) и фото согласия родителя уже получено.
+    После создания строки фиксируем "Согласие родителя" = "Да" (вместо
+    "Ожидается", которое ставит add_pending_participant при is_minor=True).
+
+    Принимает любые *args/**kwargs, чтобы не зависеть от точной сигнатуры
+    вызова в vk_bot.py. Из kwargs вынимаются «лишние» ключи, которых
+    нет в add_pending_participant:
+      - parent_consent_photo_id — file_id фото согласия родителя
+    Остальные kwargs пробрасываются как есть.
+    """
+    # Вынимаем «лишние» ключи, которых нет в add_pending_participant
+    parent_photo_id = kwargs.pop("parent_consent_photo_id", None)
+    # На случай, если VK-бот называет параметр иначе — поддержим алиасы
+    for alias in ("parent_photo_id", "consent_photo_id", "photo_id"):
+        if alias in kwargs and parent_photo_id is None:
+            parent_photo_id = kwargs.pop(alias)
+
+    # Обработчик вызывается при получении фото согласия — участник младше 18
+    kwargs["is_minor"] = True
+
+    row_index = add_pending_participant(*args, **kwargs)
+
+    # Согласие родителя подтверждено фото
+    set_participant_field(
+        row_index, "Согласие родителя (14-17, да/нет)", "Да"
+    )
+
+    if parent_photo_id:
+        set_participant_field(
+            row_index,
+            "Примечания",
+            f"Согласие родителя (фото): {parent_photo_id}",
+        )
+
+    return row_index
+
+
 def set_participant_status(row_index: int, status: str, participant_id: str = None):
     updates = {"Статус оплаты": status}
     if participant_id:
@@ -362,3 +404,24 @@ def update_report_decision(row_index: int, status: str, lives_after: int, commen
     for col_name, value in updates.items():
         col = REPORTS_HEADERS.index(col_name) + 1
         reports_ws.update_cell(row_index, col, value)
+
+
+# ---------- Диагностика ----------
+
+def __getattr__(name):
+    """Понятное сообщение при обращении к несуществующей функции модуля.
+
+    Вместо сухого 'module sheets has no attribute xxx' в логах будет
+    список доступных функций — сразу видно, чего не хватает.
+    """
+    if name.startswith("_"):
+        # служебные (__path__, __all__ и т.п.) — не перехватываем
+        raise AttributeError(name)
+    available = sorted(
+        n for n, v in globals().items()
+        if not n.startswith("_") and callable(v)
+    )
+    raise AttributeError(
+        f"module 'sheets' has no attribute {name!r}. "
+        f"Available functions: {available}"
+    )
