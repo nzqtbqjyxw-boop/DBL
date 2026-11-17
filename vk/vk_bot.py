@@ -139,7 +139,7 @@ def kb_report_decision(row: int) -> str:
     нести произвольный payload с текстом и одновременно показываться как
     отдельное сообщение на каждую карточку, поэтому используем payload с
     JSON {"action": ..., "row": row} — обрабатываем в message_event/payload."""
-    kb = VkKeyboard(one_time=False, inline=True)
+    kb = VkKeyboard(inline=True)
     kb.add_button("Засчитать", color=VkKeyboardColor.POSITIVE,
                   payload={"action": "rep_ok", "row": row})
     kb.add_button("Не засчитать", color=VkKeyboardColor.NEGATIVE,
@@ -153,7 +153,7 @@ def kb_report_decision(row: int) -> str:
 
 
 def kb_admission_decision(row: int) -> str:
-    kb = VkKeyboard(one_time=False, inline=True)
+    kb = VkKeyboard(inline=True)
     kb.add_button("Подтвердить", color=VkKeyboardColor.POSITIVE,
                   payload={"action": "adm_ok", "row": row})
     kb.add_button("Отклонить", color=VkKeyboardColor.NEGATIVE,
@@ -165,14 +165,14 @@ def kb_admission_decision(row: int) -> str:
 
 
 def kb_skip_time() -> str:
-    kb = VkKeyboard(one_time=True, inline=True)
+    kb = VkKeyboard(inline=True)
     kb.add_button("Пропустить (время неизвестно)", color=VkKeyboardColor.SECONDARY,
                   payload={"action": "rep_time_skip"})
     return kb.get_keyboard()
 
 
 def kb_parent_consent_decision(row: int) -> str:
-    kb = VkKeyboard(one_time=False, inline=True)
+    kb = VkKeyboard(inline=True)
     kb.add_button("Согласие получено", color=VkKeyboardColor.POSITIVE,
                   payload={"action": "pc_ok", "row": row})
     kb.add_line()
