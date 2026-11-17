@@ -41,7 +41,7 @@ PARTICIPANTS_HEADERS = [
     "Адрес доставки", "Согласие с офертой (дата/время)",
     "Согласие на обработку ПДн (дата/время)", "Согласие родителя (14-17, да/нет)",
     "Пригласил (чей реф.код)", "Приглашено друзей (оплативших)",
-    "Реф-статус на след.сезон", "Телефон",
+    "Реф-статус на след.сезон", "Телефон", "Платформа",
 ]
 
 REPORTS_HEADERS = [
@@ -57,16 +57,9 @@ MAX_ATTEMPTS_PER_DAY = 3
 
 SEASON_START_DATE = datetime.strptime("2026-11-14", "%Y-%m-%d")
 
-# Последняя колонка листа "Участники" в A1-нотации (должна соответствовать
-# длине PARTICIPANTS_HEADERS). Сейчас 22 колонки -> V.
-PARTICIPANTS_LAST_COL = "V"
-
-# Последняя колонка листа "Отчёты" в A1-нотации.
-# Сейчас 16 колонок -> P.
+PARTICIPANTS_LAST_COL = "W"
 REPORTS_LAST_COL = "P"
 
-# Пороги реферальной программы: сколько оплативших друзей нужно пригласить,
-# чтобы получить соответствующий статус на СЛЕДУЮЩИЙ сезон.
 REFERRAL_TIERS = [
     (4, "Бесплатно"),
     (1, "Скидка 1100₽"),
@@ -78,7 +71,6 @@ def now_str():
 
 
 def get_season_day():
-    """Возвращает день сезона (1-14) или None если сезон ещё не начался."""
     today = datetime.now(MSK).date()
     start = SEASON_START_DATE.date()
     if today < start:
@@ -88,7 +80,6 @@ def get_season_day():
 
 
 def _norm(value) -> str:
-    """Нормализует значение для регистронезависимого сравнения (да/нет и т.п.)."""
     return str(value or "").strip().lower()
 
 
@@ -108,16 +99,10 @@ def set_participant_field(row_index: int, field: str, value):
 
 
 def find_participant_row(telegram_id: str):
-    """Возвращает (row_index, record) по Telegram ID, либо (None, None).
-    Поле хранится как "<id> (<имя>)", поэтому сравниваем только часть до пробела.
-    Если у одного Telegram ID оказалось НЕСКОЛЬКО строк (например, человек
-    сначала начал регистрацию, она не завершилась, и позже создалась вторая
-    строка) — возвращаем ПОСЛЕДНЮЮ (самую свежую), а из найденных строк
-    приоритет отдаём той, где "Статус оплаты" == "Оплачено", если такая есть."""
     records = participants_ws.get_all_records()
     target = str(telegram_id).strip()
     matches = []
-    for i, rec in enumerate(records, start=2):  # строка 1 — заголовок
+    for i, rec in enumerate(records, start=2):
         field = str(rec.get("Telegram/контакт", "")).strip()
         field_id = field.split(" ")[0] if field else ""
         if field_id == target:
@@ -130,26 +115,7 @@ def find_participant_row(telegram_id: str):
     return matches[-1]
 
 
-def find_participant_by_platform_id(platform_id, platform: str = "telegram"):
-    """Универсальный поиск участника по ID платформы (Telegram / VK).
-
-    На текущий момент оба бота (Telegram и VK) хранят ID в общем поле
-    "Telegram/контакт" в формате "<id> (<имя>)" (см. add_pending_participant),
-    поэтому логика поиска одинаковая — делегируем в find_participant_row.
-
-    ВАЖНО: потенциальная коллизия. Если Telegram-пользователь и VK-пользователь
-    имеют одинаковый числовой ID, они «склеятся». Если это станет проблемой —
-    нужно хранить префикс платформы (например, "tg:123" / "vk:123"),
-    но это потребует миграции существующих строк.
-
-    Параметр platform оставлен для совместимости с сигнатурой вызова
-    в vk_bot.py и на будущее.
-    """
-    return find_participant_row(platform_id)
-
-
 def find_participant_by_id(participant_id: str):
-    """Возвращает (row_index, record) по "ID участника" (DBL S01-0042), либо (None, None)."""
     records = participants_ws.get_all_records()
     target = str(participant_id).strip()
     for i, rec in enumerate(records, start=2):
@@ -162,20 +128,11 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
                              season: str = "S01", address: str = "", consent_at: str = "",
                              pdn_consent_at: str = "", is_minor: bool = False,
                              referred_by: str = "", phone: str = ""):
-    """
-    Заполняет первую пустую заготовку (Telegram/контакт пуст, Сезон совпадает)
-    или, если заготовок не осталось, добавляет новую строку в конец.
-    Записывает также спорт/тариф/сумму/адрес/согласие с офертой/согласие на ПДн/
-    кто пригласил/телефон.
-    Если участник несовершеннолетний (14-17), колонка "Согласие родителя" ставится
-    в "Ожидается" — пустая строка означает "вопрос ещё не возникал" (18+).
-    Возвращает номер строки.
-    """
     telegram_value = f"{telegram_id} ({username})"
     with _write_lock:
         records = participants_ws.get_all_records()
         row_index = None
-        for i, rec in enumerate(records, start=2):  # строка 1 — заголовок
+        for i, rec in enumerate(records, start=2):
             telegram_field = str(rec.get("Telegram/контакт", "")).strip()
             rec_season = str(rec.get("Сезон", "")).strip()
             if telegram_field == "" and rec_season == season:
@@ -212,9 +169,9 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
             "Ожидает проверки", "", "Не определено", "Нет", "", "", "",
             address, consent_at, pdn_consent_at,
             "Ожидается" if is_minor else "",
-            referred_by, "", "", phone,
+            referred_by, "", "", phone, "Telegram",
         ]
-        last_used = len(records) + 1  # +1 за заголовок
+        last_used = len(records) + 1
         row_index = last_used + 1
         participants_ws.update(
             f"A{row_index}:{PARTICIPANTS_LAST_COL}{row_index}",
@@ -223,46 +180,97 @@ def add_pending_participant(telegram_id: str, username: str, sport: str, tariff:
         return row_index
 
 
-def add_pending_participant_vk(*args, **kwargs):
-    """
-    VK-обёртка над add_pending_participant.
+# ---------- Поддержка VK ----------
 
-    Вызывается из handle_parent_consent_photo — то есть участник
-    несовершеннолетний (14-17) и фото согласия родителя уже получено.
-    После создания строки фиксируем "Согласие родителя" = "Да" (вместо
-    "Ожидается", которое ставит add_pending_participant при is_minor=True).
+def parse_vk_id(raw_field: str):
+    field = str(raw_field or "").strip()
+    if not field.startswith("vk:"):
+        return None
+    id_part = field[3:].split(" ")[0]
+    try:
+        return int(id_part)
+    except ValueError:
+        return None
 
-    Принимает любые *args/**kwargs, чтобы не зависеть от точной сигнатуры
-    вызова в vk_bot.py. Из kwargs вынимаются «лишние» ключи, которых
-    нет в add_pending_participant:
-      - parent_consent_photo_id — file_id фото согласия родителя
-    Остальные kwargs пробрасываются как есть.
-    """
-    # Вынимаем «лишние» ключи, которых нет в add_pending_participant
-    parent_photo_id = kwargs.pop("parent_consent_photo_id", None)
-    # На случай, если VK-бот называет параметр иначе — поддержим алиасы
-    for alias in ("parent_photo_id", "consent_photo_id", "photo_id"):
-        if alias in kwargs and parent_photo_id is None:
-            parent_photo_id = kwargs.pop(alias)
 
-    # Обработчик вызывается при получении фото согласия — участник младше 18
-    kwargs["is_minor"] = True
+def find_participant_by_platform_id(platform_user_id, platform: str = "telegram"):
+    """platform="VK" ищет по префиксу "vk:" в колонке "Telegram/контакт".
+    Любое другое значение — обычный Telegram-поиск (для обратной совместимости)."""
+    if str(platform).upper() != "VK":
+        return find_participant_row(platform_user_id)
 
-    row_index = add_pending_participant(*args, **kwargs)
+    records = participants_ws.get_all_records()
+    target = str(platform_user_id).strip()
+    matches = []
+    for i, rec in enumerate(records, start=2):
+        field = str(rec.get("Telegram/контакт", "")).strip()
+        vk_id = parse_vk_id(field)
+        if vk_id is not None and str(vk_id) == target:
+            matches.append((i, rec))
+    if not matches:
+        return None, None
+    for i, rec in matches:
+        if rec.get("Статус оплаты") == "Оплачено":
+            return i, rec
+    return matches[-1]
 
-    # Согласие родителя подтверждено фото
-    set_participant_field(
-        row_index, "Согласие родителя (14-17, да/нет)", "Да"
-    )
 
-    if parent_photo_id:
-        set_participant_field(
-            row_index,
-            "Примечания",
-            f"Согласие родителя (фото): {parent_photo_id}",
+def get_vk_id_by_participant(participant_id: str):
+    row, rec = find_participant_by_id(participant_id)
+    if not rec:
+        return None
+    return parse_vk_id(rec.get("Telegram/контакт", ""))
+
+
+def add_pending_participant_vk(vk_id: int, full_name: str, sport: str, tariff: str, price,
+                                season: str = "S01", consent_at: str = "", phone: str = "",
+                                is_minor: bool = False):
+    """Хранит VK ID в "Telegram/контакт" с префиксом "vk:", заполняет "Платформа"."""
+    contact_value = f"vk:{vk_id} ({full_name})"
+    with _write_lock:
+        records = participants_ws.get_all_records()
+        row_index = None
+        for i, rec in enumerate(records, start=2):
+            telegram_field = str(rec.get("Telegram/контакт", "")).strip()
+            rec_season = str(rec.get("Сезон", "")).strip()
+            if telegram_field == "" and rec_season == season:
+                row_index = i
+                break
+
+        values = {
+            "Telegram/контакт": contact_value,
+            "Спорт": sport,
+            "Тариф": tariff,
+            "Сумма оплаты, ₽": price,
+            "Статус оплаты": "Ожидает проверки",
+            "Платформа": "VK",
+        }
+        if consent_at:
+            values["Согласие с офертой (дата/время)"] = consent_at
+        if is_minor:
+            values["Согласие родителя (14-17, да/нет)"] = "Ожидается"
+        if phone:
+            values["Телефон"] = phone
+
+        if row_index is not None:
+            for col_name, value in values.items():
+                participants_ws.update_cell(row_index, PARTICIPANTS_HEADERS.index(col_name) + 1, value)
+            return row_index
+
+        row = [""] * len(PARTICIPANTS_HEADERS)
+        for col_name, value in values.items():
+            row[PARTICIPANTS_HEADERS.index(col_name)] = value
+        row[PARTICIPANTS_HEADERS.index("Сезон")] = season
+        row[PARTICIPANTS_HEADERS.index("Право на медаль")] = "Не определено"
+        row[PARTICIPANTS_HEADERS.index("Адрес получен?")] = "Нет"
+
+        last_used = len(records) + 1
+        row_index = last_used + 1
+        participants_ws.update(
+            f"A{row_index}:{PARTICIPANTS_LAST_COL}{row_index}",
+            [row], value_input_option="USER_ENTERED",
         )
-
-    return row_index
+        return row_index
 
 
 def set_participant_status(row_index: int, status: str, participant_id: str = None):
@@ -275,8 +283,6 @@ def set_participant_status(row_index: int, status: str, participant_id: str = No
 
 
 def has_parent_consent(rec: dict) -> bool:
-    """True, если согласие родителя не требуется (поле пустое, участник 18+)
-    либо получено и подтверждено организатором."""
     value = rec.get("Согласие родителя (14-17, да/нет)", "")
     if value == "":
         return True
@@ -284,7 +290,6 @@ def has_parent_consent(rec: dict) -> bool:
 
 
 def get_lives(participant_id: str) -> int:
-    """Текущие жизни = 3 минус кол-во незачтённых дней без возврата, по логу Отчёты."""
     records = reports_ws.get_all_records()
     lives = 3
     for rec in records:
@@ -301,8 +306,6 @@ def get_lives(participant_id: str) -> int:
 
 
 def referral_tier_for_count(count: int) -> str:
-    """Возвращает текст реф-статуса для данного числа оплативших друзей,
-    либо "" если порог ещё не достигнут."""
     for threshold, label in REFERRAL_TIERS:
         if count >= threshold:
             return label
@@ -310,10 +313,6 @@ def referral_tier_for_count(count: int) -> str:
 
 
 def increment_referral_count(referrer_participant_id: str):
-    """Находит реферера по его "ID участника", увеличивает счётчик
-    "Приглашено друзей (оплативших)" на 1 и пересчитывает реф-статус
-    на следующий сезон. Возвращает (row_index, новый_счётчик, новый_статус)
-    либо (None, None, None), если реферер не найден."""
     row, rec = find_participant_by_id(referrer_participant_id)
     if row is None:
         return None, None, None
@@ -331,9 +330,6 @@ def increment_referral_count(referrer_participant_id: str):
 # ---------- Отчёты ----------
 
 def get_today_report_status(participant_id: str, training_date: str):
-    """Возвращает (row_index, статус, номер_попытки) ПОСЛЕДНЕГО отчёта за training_date,
-    либо (None, None, 0), если отчётов за эту дату ещё не было.
-    Номер попытки — реальный счётчик по всем строкам за этот день."""
     records = reports_ws.get_all_records()
     last_row_index, last_status, attempt_count = None, None, 0
     for i, rec in enumerate(records, start=2):
@@ -345,8 +341,6 @@ def get_today_report_status(participant_id: str, training_date: str):
 
 
 def can_submit_report(participant_id: str, training_date: str):
-    """Можно ли отправить новый отчёт за training_date.
-    Возвращает (можно: bool, причина: str|None)."""
     _, status, attempts = get_today_report_status(participant_id, training_date)
     if status in PENDING_STATUSES:
         return False, "pending"
@@ -364,7 +358,7 @@ def add_report(participant_id, season, day, training_date, sport, km, file_id):
         "", "",
     ]
     with _write_lock:
-        col_a = reports_ws.col_values(1)  # ID участника — последняя реально заполненная строка
+        col_a = reports_ws.col_values(1)
         row_index = len(col_a) + 1
         reports_ws.update(f"A{row_index}:{REPORTS_LAST_COL}{row_index}", [row], value_input_option="USER_ENTERED")
         return row_index, sent_at, attempt_number
@@ -379,7 +373,6 @@ def update_report_photo_and_status(row_index: int, file_id: str, status: str):
     reports_ws.update_cell(row_index, REPORTS_HEADERS.index("Скриншот (file_id)") + 1, file_id)
     reports_ws.update_cell(row_index, REPORTS_HEADERS.index("Статус") + 1, status)
     reports_ws.update_cell(row_index, REPORTS_HEADERS.index("Время отправки") + 1, sent_at)
-    # увеличиваем счётчик попытки
     current = reports_ws.cell(row_index, REPORTS_HEADERS.index("Попытка №") + 1).value
     try:
         attempt = int(current) + 1
@@ -404,24 +397,3 @@ def update_report_decision(row_index: int, status: str, lives_after: int, commen
     for col_name, value in updates.items():
         col = REPORTS_HEADERS.index(col_name) + 1
         reports_ws.update_cell(row_index, col, value)
-
-
-# ---------- Диагностика ----------
-
-def __getattr__(name):
-    """Понятное сообщение при обращении к несуществующей функции модуля.
-
-    Вместо сухого 'module sheets has no attribute xxx' в логах будет
-    список доступных функций — сразу видно, чего не хватает.
-    """
-    if name.startswith("_"):
-        # служебные (__path__, __all__ и т.п.) — не перехватываем
-        raise AttributeError(name)
-    available = sorted(
-        n for n, v in globals().items()
-        if not n.startswith("_") and callable(v)
-    )
-    raise AttributeError(
-        f"module 'sheets' has no attribute {name!r}. "
-        f"Available functions: {available}"
-    )
