@@ -853,7 +853,7 @@ class VKBot:
             return
 
         # команда старта
-        if text.strip().lower() in ("начать", "start", "/start"):
+        if text.strip().lower() in ("начать", "старт", "start", "/start"):
             self.handle_start(user_id)
             return
 
