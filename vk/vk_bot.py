@@ -343,6 +343,21 @@ class VKBot:
             if text_norm.startswith("С медалью"):
                 data["tariff"] = "С медалью"
                 data["price"] = PRICE_WITH_MEDAL
+                season_day = sheets.get_season_day()
+                if season_day is not None:
+                    # Сезон уже идёт — регистрация с медалью пойдёт на СЛЕДУЮЩИЙ сезон
+                    data["target_season"] = "S02"
+                    _set_state(user_id, STATE_WAITING_PAYMENT_PROOF, **data)
+                    self.send(
+                        user_id,
+                        f"⚠️ Сезон уже идёт (день {season_day}/14), поэтому твоя оплата и "
+                        f"регистрация пойдут на СЛЕДУЮЩИЙ сезон (S02).\n\n"
+                        f"Тариф: С медалью\nЦена: {PRICE_WITH_MEDAL}₽\n\n"
+                        f"Оплати по ссылке: {PAYMENT_LINK_WITH_MEDAL}\n\n"
+                        "После оплаты пришли сюда чек/скриншот оплаты и укажи ФИО, "
+                        "которое использовал при оплате.",
+                    )
+                    return
                 _set_state(user_id, STATE_WAITING_PAYMENT_PROOF, **data)
                 self.send(
                     user_id,
@@ -443,6 +458,7 @@ class VKBot:
         consent_at = data.get("docs_accepted_at", "")
         age_choice = data.get("age_choice", "")
         retry_row = data.get("retry_row")
+        season = data.get("target_season", "S01")
 
         if retry_row:
             row = retry_row
@@ -450,7 +466,7 @@ class VKBot:
         else:
             row = sheets.add_pending_participant_vk(
                 vk_id=user_id, full_name=full_name, sport=sport, tariff=tariff,
-                price=price, consent_at=consent_at, is_minor=(age_choice == "teen"),
+                price=price, season=season, consent_at=consent_at, is_minor=(age_choice == "teen"),
             )
 
         caption = (
