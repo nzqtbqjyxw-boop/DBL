@@ -424,7 +424,19 @@ async def chosen_tariff(callback: CallbackQuery, state: FSMContext):
     pay_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить {PRICE_WITH_MEDAL}₽", url=PAYMENT_LINK_WITH_MEDAL)],
     ])
+
+    season_day = sheets.get_season_day()
+    warning_text = ""
+    if season_day is not None:
+        # Сезон уже идёт — регистрация с медалью пойдёт на СЛЕДУЮЩИЙ сезон
+        await state.update_data(target_season="S02")
+        warning_text = (
+            f"⚠️ Сезон уже идёт (день {season_day}/14), поэтому твоя оплата и "
+            f"регистрация пойдут на СЛЕДУЮЩИЙ сезон (S02).\n\n"
+        )
+
     await callback.message.edit_text(
+        f"{warning_text}"
         f"Тариф: {tariff}\n"
         f"Цена: <s>{PRICE_WITH_MEDAL_OLD}₽</s> {PRICE_WITH_MEDAL}₽\n\n"
         f"Нажми кнопку ниже, чтобы оплатить. После оплаты пришли сюда чек/скриншот "
@@ -463,6 +475,8 @@ async def _register_free_participant(message: Message, state: FSMContext, bot: B
     source = data.get("source", "прямой")
     referred_by = data.get("referred_by", "")
 
+    # Тариф "Без медали" можно взять в любой момент, независимо от того,
+    # начался сезон или нет (бежит "для себя") — всегда текущий сезон S01.
     row = sheets.add_pending_participant(
         telegram_id=message.from_user.id,
         username=message.from_user.username or message.from_user.full_name,
@@ -523,6 +537,11 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
     age_choice = data.get("age_choice", "")
     source = data.get("source", "прямой")
     referred_by = data.get("referred_by", "")
+    # Если сезон уже шёл в момент выбора тарифа "С медалью", chosen_tariff
+    # положил в state target_season="S02" — используем его при создании
+    # новой строки. Если его нет — обычный текущий сезон (значение по
+    # умолчанию внутри add_pending_participant, сейчас "S01").
+    season = data.get("target_season")
 
     if retry_row:
         row = retry_row
@@ -531,7 +550,7 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
             sheets.set_participant_field(row, "Согласие с офертой (дата/время)", consent_at)
             sheets.set_participant_field(row, "Согласие на обработку ПДн (дата/время)", consent_at)
     else:
-        row = sheets.add_pending_participant(
+        kwargs = dict(
             telegram_id=message.from_user.id,
             username=message.from_user.username or message.from_user.full_name,
             sport=sport,
@@ -540,6 +559,9 @@ async def handle_payment_proof(message: Message, state: FSMContext, bot: Bot):
             consent_at=consent_at,
             referred_by=referred_by,
         )
+        if season:
+            kwargs["season"] = season
+        row = sheets.add_pending_participant(**kwargs)
         if consent_at:
             sheets.set_participant_field(row, "Согласие на обработку ПДн (дата/время)", consent_at)
         if age_choice == "teen":
